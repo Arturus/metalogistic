@@ -7,7 +7,7 @@ class MetaLogistic(stats.rv_continuous):
 	We subclass scipy.stats.rv_continuous so we can make use of all the nice SciPy methods. We redefine the private methods
 	_cdf, _pdf, and _ppf, and SciPy will make calls to these whenever needed.
 	'''
-	def __init__(self, cdf_ps, cdf_xs, term=None, fit_method=None, boundedness='u', bounds=None):
+	def __init__(self, cdf_ps, cdf_xs, term=None, fit_method=None, lbound=None, ubound=None):
 		'''
 		:param cdf_ps: Probabilities of the CDF input data.
 		:param cdf_xs: X-values of the CDF input data (the pre-images of the probabilities).
@@ -19,8 +19,19 @@ class MetaLogistic(stats.rv_continuous):
 		'''
 		super(MetaLogistic, self).__init__()
 
-		self.boundedness = boundedness
-		self.bounds = bounds
+		if lbound is None and ubound is None:
+			self.boundedness = False
+		if lbound is None and ubound is not None:
+			self.boundedness = 'upper'
+			self.ubound = ubound
+		if lbound  is not None and ubound is None:
+			self.boundedness = 'lower'
+			self.lbound = lbound
+		if lbound is not None and ubound is not None:
+			self.boundedness = 'bounded'
+			self.lbound = lbound
+			self.ubound = ubound
+
 		self.fit_method_requested = fit_method
 		self.cdf_ps = np.asarray(cdf_ps)
 		self.cdf_xs = np.asarray(cdf_xs)
@@ -49,13 +60,20 @@ class MetaLogistic(stats.rv_continuous):
 
 	def constructZVec(self):
 		'''
-		Constructs the z-vector, as defined in Keelin 2016, Section 4.1., Section 4.3.
+		Constructs the z-vector, as defined in Keelin 2016, Section 3.3. (unbounded case, where it is called the `x`-vector),
+		Section 4.1 (semi-bounded case), and Section 4.3 (bounded case).
 
 		This vector is a transformation of cdf_xs to account for bounded or semi-bounded distributions.
 		When the distribution is unbounded, the z-vector is simply equal to cdf_xs.
 		'''
-		if self.boundedness == 'u':
+		if not self.boundedness:
 			self.z_vec = self.cdf_xs
+		if self.boundedness == 'lower':
+			self.z_vec = np.log(self.cdf_xs-self.lbound)
+		if self.boundedness == 'upper':
+			self.z_vec = np.log(self.ubound - self.cdf_xs)
+		if self.boundedness == 'bounded':
+			self.z_vec = np.log((self.cdf_xs-self.lbound)/(self.ubound-self.cdf_xs))
 
 	def constructYMatrix(self):
 		'''
@@ -85,23 +103,24 @@ class MetaLogistic(stats.rv_continuous):
 
 	def quantile(self, probability):
 		'''
-		The metalog inverse CDF, or quantile function, as defined in Keelin 2016, Equation 6.
+		The metalog inverse CDF, or quantile function, as defined in Keelin 2016, Equation 6 (unbounded case), Equation 11 (semi-bounded case),
+		and Equation 14 (bounded case).
 
-		`probability` must be a scalar
+		`probability` must be a scalar.
 		'''
 
 		if not 0 <= probability <= 1:
-			raise ValueError("probability in call to quantile() must be between 0 and 1")
+			raise ValueError("Probability in call to quantile() must be between 0 and 1")
 
 		if probability == 0:
-			if self.boundedness == 'sl' or self.boundedness == 'b':
-				return self.bounds['lower']
+			if self.boundedness == 'lower' or self.boundedness == 'bounded':
+				return self.lbound
 			else:
 				return -np.inf
 
 		if probability == 1:
-			if self.boundedness == 'su' or self.boundedness == 'b':
-				return self.bounds['upper']
+			if self.boundedness == 'upper' or self.boundedness == 'bounded':
+				return self.ubound
 			else:
 				return np.inf
 
@@ -117,7 +136,8 @@ class MetaLogistic(stats.rv_continuous):
 
 		quantile_functions[2] = a[1] + a[2] * ln_p_term
 		quantile_functions[3] = quantile_functions[2] + a[3] * p05_term * ln_p_term
-		quantile_functions[4] = quantile_functions[3] + a[4] * p05_term
+		if self.term>3:
+			quantile_functions[4] = quantile_functions[3] + a[4] * p05_term
 
 		if (self.term > 4):
 			for n in range(5, self.term + 1):
@@ -127,17 +147,29 @@ class MetaLogistic(stats.rv_continuous):
 				if n % 2 == 0:
 					quantile_functions[n] = quantile_functions[n - 1] + a[n] * p05_term ** (n / 2 - 1) * ln_p_term
 
-		# TODO: bounded cases
+		quantile_function = quantile_functions[self.term]
 
-		return quantile_functions[self.term]
+		if self.boundedness == 'lower':
+			quantile_function = self.lbound + np.exp(quantile_function)  # Equation 11
+		if self.boundedness == 'upper':
+			quantile_function = self.ubound - np.exp(-quantile_function)
+		if self.boundedness == 'bounded':
+			quantile_function = (self.lbound+self.ubound*np.exp(quantile_function))/(1+np.exp(quantile_function))  # Equation 14
+
+		return quantile_function
 
 	def densitySmallM(self,cumulative_prob):
 		'''
-		This is the metalog PDF as a function of cumulative probability, as defined in Keelin 2016, Equation 9 (unbounded case).
+		This is the metalog PDF as a function of cumulative probability, as defined in Keelin 2016, Equation 9 (unbounded case),
+		Equation 13 (semi-bounded case),
 		Notice the unusual definition of the PDF, which is why I call this function densitySmallM in reference to the notation in
 		Keelin 2016.
 		'''
 
+		if not 0 <= cumulative_prob <= 1:
+			raise ValueError("Probability in call to densitySmallM() must be between 0 and 1")
+		if not self.boundedness and (cumulative_prob==0 or cumulative_prob==1):
+			raise ValueError("Probability in call to densitySmallM() cannot be equal to 0 and 1 for an unbounded distribution")
 
 
 		# The series of density functions. Although we only return the last result in the series, the entire series is necessary to construct it
@@ -154,7 +186,8 @@ class MetaLogistic(stats.rv_continuous):
 
 		density_functions[2] = cumulative_prob*(1-cumulative_prob)/a[2]
 		density_functions[3] = 1/(1/density_functions[2] + a[3]*(p05_term/p1p_term)+ln_p_term)
-		density_functions[4] = 1/(1/density_functions[3] + a[4])
+		if self.term>3:
+			density_functions[4] = 1/(1/density_functions[3] + a[4])
 
 		if (self.term > 4):
 			for n in range(5, self.term + 1):
@@ -166,7 +199,31 @@ class MetaLogistic(stats.rv_continuous):
 																			  (n/2-1)*p05_term**(n/2-2)*ln_p_term)
 											  )
 
-		return density_functions[self.term]
+		density_function = density_functions[self.term]
+
+		if self.boundedness == 'lower':   # Equation 13
+			if 0<cumulative_prob<1:
+				density_function = density_function * np.exp(-self.quantile(cumulative_prob))
+			elif cumulative_prob == 0:
+				density_function = 0
+			else:
+				raise ValueError("Probability in call to densitySmallM() cannot be equal to 1 with a lower-bounded distribution.")
+		if self.boundedness == 'upper':
+			if 0 < cumulative_prob < 1:
+				density_function = density_function * np.exp(self.quantile(cumulative_prob))
+			elif cumulative_prob == 1:
+				density_function = 0
+			else:
+				raise ValueError("Probability in call to densitySmallM() cannot be equal to 0 with a upper-bounded distribution.")
+
+		if self.boundedness == 'bounded':  # Equation 15
+			if 0 < cumulative_prob < 1:
+				density_function = density_function * ((1+np.exp(self.quantile(cumulative_prob)))**2) / ((self.ubound-self.lbound)*np.exp(self.quantile(cumulative_prob)))
+			if cumulative_prob==0 or cumulative_prob==1:
+				density_function = 0
+
+		return density_function
+
 
 
 
@@ -186,9 +243,9 @@ class MetaLogistic(stats.rv_continuous):
 
 		`x` may be a scalar or list-like.
 		'''
-		if isinstance(x, (list, np.ndarray)):
+		if self.isListLike(x):
 			return [self._cdf(i) for i in x]
-		if isinstance(x, (float, int)):
+		if self.isNumeric(x):
 			return self.getCumulativeProb(x)
 
 	def _ppf(self, probability):
@@ -197,10 +254,10 @@ class MetaLogistic(stats.rv_continuous):
 
 		`probability` may be a scalar or list-like.
 		'''
-		if isinstance(probability, (list, np.ndarray)):
+		if self.isListLike(probability):
 			return [self._ppf(i) for i in probability]
 
-		if isinstance(probability, (float, int)):
+		if self.isNumeric(probability):
 			return self.quantile(probability)
 
 	def _pdf(self, x):
@@ -209,9 +266,15 @@ class MetaLogistic(stats.rv_continuous):
 
 		`x` may be a scalar or list-like.
 		'''
-		if isinstance(x, (list, np.ndarray)):
+		if self.isListLike(x):
 			return [self._pdf(i) for i in x]
 
-		if isinstance(x,(float,int)):
+		if self.isNumeric(x):
 			cumulative_prob = self.getCumulativeProb(x)
 			return self.densitySmallM(cumulative_prob)
+
+	def isNumeric(self,object):
+		return isinstance(object, (float, int)) or (isinstance(object,np.ndarray) and object.ndim==0)
+
+	def isListLike(self,object):
+		return isinstance(object, list) or (isinstance(object,np.ndarray) and object.ndim==1)
