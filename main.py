@@ -7,15 +7,15 @@ class MetaLogistic(stats.rv_continuous):
 	We subclass scipy.stats.rv_continuous so we can make use of all the nice SciPy methods. We redefine the private methods
 	_cdf, _pdf, and _ppf, and SciPy will make calls to these whenever needed.
 	'''
-	def __init__(self, cdf_ps, cdf_xs, term=None, fit_method=None, lbound=None, ubound=None):
+	def __init__(self, cdf_ps, cdf_xs, term=None, fit_method=None, lbound=None, ubound=None, a_vector=None):
 		'''
 		:param cdf_ps: Probabilities of the CDF input data.
 		:param cdf_xs: X-values of the CDF input data (the pre-images of the probabilities).
 		:param term: Produces a `term`-term metalog. Cannot be greater than the number of CDF points provided. By default, it is
 		equal to the number of CDF points.
-		:param fit_method:
-		:param boundedness:
-		:param bounds:
+		:param fit_method: Set to 'LLS' to allow linear least squares only. By default, numerical methods are tried if LLS fails.
+		:param lbound: Lower bound
+		:param ubound: Upper bound
 		'''
 		super(MetaLogistic, self).__init__()
 
@@ -23,16 +23,24 @@ class MetaLogistic(stats.rv_continuous):
 			self.boundedness = False
 		if lbound is None and ubound is not None:
 			self.boundedness = 'upper'
-			self.ubound = ubound
-		if lbound  is not None and ubound is None:
+		if lbound is not None and ubound is None:
 			self.boundedness = 'lower'
-			self.lbound = lbound
 		if lbound is not None and ubound is not None:
 			self.boundedness = 'bounded'
-			self.lbound = lbound
-			self.ubound = ubound
+		self.lbound = lbound
+		self.ubound = ubound
+
+		# Special case where a MetaLogistic object is created by supplying the a-vector directly.
+		if a_vector is not None:
+			self.a_vector = a_vector
+			if term is None:
+				self.term = len(a_vector)
+			else:
+				self.term = term
+			return
 
 		self.fit_method_requested = fit_method
+		self.cdf_p_x_mapping = {cdf_ps[i]: cdf_xs[i] for i in range(len(cdf_ps))}
 		self.cdf_ps = np.asarray(cdf_ps)
 		self.cdf_xs = np.asarray(cdf_xs)
 		self.cdf_len = len(cdf_ps)
@@ -41,12 +49,36 @@ class MetaLogistic(stats.rv_continuous):
 			raise ValueError("cdf_ps and cdf_xs must have the same length")
 
 		if term is None:
-			term = self.cdf_len
-		self.term = term
+			self.term = self.cdf_len
+		else:
+			self.term = term
+
 
 		self.constructZVec()
 		self.constructYMatrix()
+
+		#  Try linear least squares
 		self.fitLinearLeastSquares()
+
+		# If linear least squares result is feasible
+		if MetaLogistic.aVecFeasibility(self.a_vector) == 0:
+			self.fit_method_used = 'LLS'
+			self.success = True
+
+		#  If linear least squares result is not feasible
+		else:
+			# if the user allows it, use numerical least squares
+			if not fit_method == 'LLS':
+				self.fit_method_used = 'numeric'
+				self.success = self.fitNumericLeastSquares().success
+
+			# If only LLS is allowed, we cannot find a valid metalog
+			else:
+				self.success = False
+
+
+
+
 
 	def fitLinearLeastSquares(self):
 		'''
@@ -57,6 +89,86 @@ class MetaLogistic(stats.rv_continuous):
 		right = np.dot(self.YMatrix.T, self.z_vec)
 
 		self.a_vector = np.dot(left, right)
+
+	def fitNumericLeastSquares(self):
+		def loss_function(a_candidate):
+			bounds_kwargs = {}
+			if self.lbound is not None:
+				bounds_kwargs['lbound'] = self.lbound
+			if self.ubound is not None:
+				bounds_kwargs['ubound'] = self.ubound
+
+			mlog_candidate = MetaLogistic(cdf_ps=None,cdf_xs=None,a_vector=a_candidate,**bounds_kwargs)
+			ps_candidate_cdf = mlog_candidate.cdf(self.cdf_xs)
+			sum_sq_error = np.sum((self.cdf_ps - ps_candidate_cdf) ** 2)
+			return sum_sq_error
+
+		def infeasibility_score(a_candidate):
+			return MetaLogistic.aVecFeasibility(a_candidate)
+
+		feasibility_constraint = optimize.NonlinearConstraint(infeasibility_score, 0, 0)
+		# TODO: experiment with different solvers
+		optimize_results = optimize.minimize(
+			loss_function, self.a_vector, constraints=feasibility_constraint,method='trust-constr')
+
+		self.a_vector = optimize_results.x
+
+		return optimize_results  # return for error checking
+
+
+	@staticmethod
+	def aVecFeasibility(a_vector):
+		'''
+		Closed-form feasibility condition on the a-vector, as defined in Keelin 2016, Equation 5.
+		Equation 5 is the derivative of Equation 6 with respect to y.
+		'''
+
+		# `self.a_vector` is 0-indexed, while in Keelin 2016 the a-vector is 1-indexed.
+		# To make this method as easy as possible to read if following along with the paper, I create a dictionary `a`
+		# that mimics a 1-indexed vector.
+		a = {i + 1: element for i, element in enumerate(a_vector)}
+
+		def series(y):
+			# TODO: verify that boundedness does not affect the feasibility condition
+			# term 2
+			series = a[2] / (y * (1 - y))
+
+			for n in range(3,len(a_vector)+1):
+				# term 3
+				if n == 3:
+					series += a[n]*((y-.5)/(y*(1-y)) + np.log(y/(1-y)))
+
+				if n % 2 == 1 and n >=5:
+					'''
+					Odd terms greater than or equal to 5 in the M_n series (Eqn. 6), and their derivative w.r.t. y.
+					For calculations, see calculations.wxmx.
+					You can paste the below into a LaTeX editor.
+					
+					term = a_n(y-0.5)^{\frac{n-1}{2}}  \\
+					\frac{\partial term}{\partial y} = 0.5 a_n (n - 1) (y - 0.5)^{\frac{n - 3}{2}}
+					'''
+					series += 0.5*a[n]*(n-1)*(y-0.5)**((n-3)/2)
+
+				if n % 2 == 0 and n >=6:
+					'''
+					Even terms greater than or equal to 6 in the M_n series (Eqn. 6), and their derivative w.r.t. y. 
+					For calculations, see calculations.wxmx.
+					You can paste the below into a LaTeX editor.
+					
+					term = a_n(y-0.5)^{\frac{n}{2}-1} \ln\frac{y}{1-y}  \\
+					\frac{\partial term}{\partial y} =  a_n\, \left( \frac{n}{2}-1\right) \, {{\left( y-0.5\right) }^{\frac{n}{2}-2}}
+					\log{\left( \frac{y}{1-y}\right) }+\frac{a_n\, \left( 1-y\right) \,
+					 {{\left( y-0.5\right) }^{\frac{n}{2}-1}}\, \left( \frac{y}{{{\left( 1-y\right) }^{2}}}+\frac{1}{1-y}\right) }{y}
+					'''
+					series+= a[n] * (n / 2-1) * (y-0.5)**(n / 2-2) * np.log(y / (1-y)) + (a[n] * (1-y) * (y-0.5)**(n / 2-1) * (y / (1-y)**2 + 1 / (1-y))) / y
+
+			return series
+
+		check_ys_from = 0.0001
+		ys_to_check = np.linspace(check_ys_from,1-check_ys_from,200)
+		xs_to_check = series(ys_to_check)
+		infeasibilty_score = sum(xs_to_check[xs_to_check<=0])
+		return infeasibilty_score
 
 	def constructZVec(self):
 		'''
