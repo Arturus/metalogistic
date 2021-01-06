@@ -325,8 +325,8 @@ class MetaLogistic(stats.rv_continuous):
 		p05_term = cumulative_prob - 0.5
 		p1p_term = cumulative_prob*(1-cumulative_prob)
 
-		density_functions[2] = cumulative_prob*(1-cumulative_prob)/a[2]
-		density_functions[3] = 1/(1/density_functions[2] + a[3]*(p05_term/p1p_term)+ln_p_term)
+		density_functions[2] = p1p_term/a[2]
+		density_functions[3] = 1/(1/density_functions[2] + a[3]*(p05_term/p1p_term+ln_p_term))
 		if self.term>3:
 			density_functions[4] = 1/(1/density_functions[3] + a[4])
 
