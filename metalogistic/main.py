@@ -16,6 +16,7 @@ class MetaLogistic(stats.rv_continuous):
 		:param fit_method: Set to 'LLS' to allow linear least squares only. By default, numerical methods are tried if LLS fails.
 		:param lbound: Lower bound
 		:param ubound: Upper bound
+		:param a_vector: You may supply the a-vector directly, in which case the input data `cdf_ps` and `cdf_xs` are not used for fitting.
 		'''
 		super(MetaLogistic, self).__init__()
 
@@ -30,6 +31,15 @@ class MetaLogistic(stats.rv_continuous):
 		self.lbound = lbound
 		self.ubound = ubound
 
+		self.fit_method_requested = fit_method
+		self.numeric_ls_solver_used = None
+
+		if cdf_xs is not None and cdf_ps is not None:
+			self.cdf_p_x_mapping = {cdf_ps[i]: cdf_xs[i] for i in range(len(cdf_ps))}
+			self.cdf_ps = np.asarray(cdf_ps)
+			self.cdf_xs = np.asarray(cdf_xs)
+			self.cdf_len = len(cdf_ps)
+
 		# Special case where a MetaLogistic object is created by supplying the a-vector directly.
 		if a_vector is not None:
 			self.a_vector = a_vector
@@ -38,12 +48,6 @@ class MetaLogistic(stats.rv_continuous):
 			else:
 				self.term = term
 			return
-
-		self.fit_method_requested = fit_method
-		self.cdf_p_x_mapping = {cdf_ps[i]: cdf_xs[i] for i in range(len(cdf_ps))}
-		self.cdf_ps = np.asarray(cdf_ps)
-		self.cdf_xs = np.asarray(cdf_xs)
-		self.cdf_len = len(cdf_ps)
 
 		if len(cdf_ps) != len(cdf_ps):
 			raise ValueError("cdf_ps and cdf_xs must have the same length")
@@ -70,7 +74,8 @@ class MetaLogistic(stats.rv_continuous):
 			# if the user allows it, use numerical least squares
 			if not fit_method == 'LLS':
 				self.fit_method_used = 'numeric'
-				self.success = self.fitNumericLeastSquares().success
+				self.fitNumericLeastSquares()
+				self.success = self.numeric_ls_OptimizeResult.success
 
 			# If only LLS is allowed, we cannot find a valid metalog
 			else:
@@ -98,23 +103,42 @@ class MetaLogistic(stats.rv_continuous):
 			if self.ubound is not None:
 				bounds_kwargs['ubound'] = self.ubound
 
-			mlog_candidate = MetaLogistic(cdf_ps=None,cdf_xs=None,a_vector=a_candidate,**bounds_kwargs)
-			ps_candidate_cdf = mlog_candidate.cdf(self.cdf_xs)
-			sum_sq_error = np.sum((self.cdf_ps - ps_candidate_cdf) ** 2)
-			return sum_sq_error
+			# Setting a_vector in this MetaLogistic call overrides the cdf_ps and cdf_xs arguments, which are only used
+			# for meanSquareError().
+			mlog_candidate = MetaLogistic(self.cdf_ps, self.cdf_xs, **bounds_kwargs, a_vector=a_candidate)
+
+			return mlog_candidate.meanSquareError()
 
 		def infeasibility_score(a_candidate):
 			return MetaLogistic.aVecFeasibility(a_candidate)
 
 		feasibility_constraint = optimize.NonlinearConstraint(infeasibility_score, 0, 0)
-		# TODO: experiment with different solvers
-		optimize_results = optimize.minimize(
-			loss_function, self.a_vector, constraints=feasibility_constraint,method='trust-constr')
+		optimize_kwargs = {}
+		# First, try the SLSQP solver, which is often fast and accurate
+		optimize_results = optimize.minimize(loss_function,
+											 self.a_vector,
+											 constraints=feasibility_constraint,
+											 method='SLSQP')
+		self.numeric_ls_solver_used = 'SLSQP'
+
+		# If the mean square error is too large, try the trust-constr solver
+		if optimize_results.fun > 0.001:
+			options = {'xtol':1e-6}
+			optimize_results = optimize.minimize(loss_function,
+												 self.a_vector,
+												 constraints=feasibility_constraint,
+												 method='trust-constr',
+												 options=options)
+			self.numeric_ls_solver_used = 'trust-constr'
 
 		self.a_vector = optimize_results.x
 
-		return optimize_results  # return for error checking
+		self.numeric_ls_OptimizeResult = optimize_results
 
+	def meanSquareError(self):
+		ps_on_fitted_cdf = self.cdf(self.cdf_xs)
+		sum_sq_error = np.sum((self.cdf_ps - ps_on_fitted_cdf) ** 2)
+		return sum_sq_error/self.cdf_len
 
 	@staticmethod
 	def aVecFeasibility(a_vector):
@@ -166,8 +190,8 @@ class MetaLogistic(stats.rv_continuous):
 
 		check_ys_from = 0.0001
 		ys_to_check = np.linspace(check_ys_from,1-check_ys_from,200)
-		xs_to_check = series(ys_to_check)
-		infeasibilty_score = sum(xs_to_check[xs_to_check<=0])
+		series_to_check = series(ys_to_check)
+		infeasibilty_score = sum(series_to_check[series_to_check<=0])
 		return infeasibilty_score
 
 	def constructZVec(self):
@@ -213,7 +237,7 @@ class MetaLogistic(stats.rv_continuous):
 
 		self.YMatrix = Y_ns[self.term]
 
-	def quantile(self, probability):
+	def _quantile(self, probability):
 		'''
 		The metalog inverse CDF, or quantile function, as defined in Keelin 2016, Equation 6 (unbounded case), Equation 11 (semi-bounded case),
 		and Equation 14 (bounded case).
@@ -315,14 +339,14 @@ class MetaLogistic(stats.rv_continuous):
 
 		if self.boundedness == 'lower':   # Equation 13
 			if 0<cumulative_prob<1:
-				density_function = density_function * np.exp(-self.quantile(cumulative_prob))
+				density_function = density_function * np.exp(-self._quantile(cumulative_prob))
 			elif cumulative_prob == 0:
 				density_function = 0
 			else:
 				raise ValueError("Probability in call to densitySmallM() cannot be equal to 1 with a lower-bounded distribution.")
 		if self.boundedness == 'upper':
 			if 0 < cumulative_prob < 1:
-				density_function = density_function * np.exp(self.quantile(cumulative_prob))
+				density_function = density_function * np.exp(self._quantile(cumulative_prob))
 			elif cumulative_prob == 1:
 				density_function = 0
 			else:
@@ -330,7 +354,7 @@ class MetaLogistic(stats.rv_continuous):
 
 		if self.boundedness == 'bounded':  # Equation 15
 			if 0 < cumulative_prob < 1:
-				density_function = density_function * ((1+np.exp(self.quantile(cumulative_prob)))**2) / ((self.ubound-self.lbound)*np.exp(self.quantile(cumulative_prob)))
+				density_function = density_function * ((1 + np.exp(self._quantile(cumulative_prob))) ** 2) / ((self.ubound - self.lbound) * np.exp(self._quantile(cumulative_prob)))
 			if cumulative_prob==0 or cumulative_prob==1:
 				density_function = 0
 
@@ -346,7 +370,7 @@ class MetaLogistic(stats.rv_continuous):
 
 		`x` must be a scalar
 		'''
-		f_to_zero = lambda probability: self.quantile(probability) - x
+		f_to_zero = lambda probability: self._quantile(probability) - x
 		return optimize.brentq(f_to_zero, 0, 1, disp=True)
 
 	def _cdf(self, x):
@@ -370,7 +394,13 @@ class MetaLogistic(stats.rv_continuous):
 			return [self._ppf(i) for i in probability]
 
 		if self.isNumeric(probability):
-			return self.quantile(probability)
+			return self._quantile(probability)
+
+	def quantile(self, probability):
+		'''
+		An alias for ppf, because 'percent point function' is somewhat non-standard terminology
+		'''
+		return self._ppf(probability)
 
 	def _pdf(self, x):
 		'''
@@ -384,6 +414,8 @@ class MetaLogistic(stats.rv_continuous):
 		if self.isNumeric(x):
 			cumulative_prob = self.getCumulativeProb(x)
 			return self.densitySmallM(cumulative_prob)
+
+
 
 	def isNumeric(self,object):
 		return isinstance(object, (float, int)) or (isinstance(object,np.ndarray) and object.ndim==0)
