@@ -8,7 +8,7 @@ class MetaLogistic(stats.rv_continuous):
 	We subclass scipy.stats.rv_continuous so we can make use of all the nice SciPy methods. We redefine the private methods
 	_cdf, _pdf, and _ppf, and SciPy will make calls to these whenever needed.
 	'''
-	def __init__(self, cdf_ps, cdf_xs, term=None, fit_method=None, lbound=None, ubound=None, a_vector=None):
+	def __init__(self, cdf_ps=None, cdf_xs=None, term=None, fit_method=None, lbound=None, ubound=None, a_vector=None):
 		'''
 		:param cdf_ps: Probabilities of the CDF input data.
 		:param cdf_xs: X-values of the CDF input data (the pre-images of the probabilities).
@@ -35,11 +35,13 @@ class MetaLogistic(stats.rv_continuous):
 		self.fit_method_requested = fit_method
 		self.numeric_ls_solver_used = None
 
+		self.cdf_ps = cdf_ps
+		self.cdf_xs = cdf_xs
 		if cdf_xs is not None and cdf_ps is not None:
 			self.cdf_p_x_mapping = {cdf_ps[i]: cdf_xs[i] for i in range(len(cdf_ps))}
-			self.cdf_ps = np.asarray(cdf_ps)
-			self.cdf_xs = np.asarray(cdf_xs)
 			self.cdf_len = len(cdf_ps)
+			self.cdf_ps = np.asarray(self.cdf_ps)
+			self.cdf_xs = np.asarray(self.cdf_xs)
 
 		# Special case where a MetaLogistic object is created by supplying the a-vector directly.
 		if a_vector is not None:
