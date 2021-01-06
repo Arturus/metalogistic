@@ -208,7 +208,7 @@ class MetaLogistic(stats.rv_continuous):
 		if self.boundedness == 'lower':
 			self.z_vec = np.log(self.cdf_xs-self.lbound)
 		if self.boundedness == 'upper':
-			self.z_vec = np.log(self.ubound - self.cdf_xs)
+			self.z_vec = -np.log(self.ubound - self.cdf_xs)
 		if self.boundedness == 'bounded':
 			self.z_vec = np.log((self.cdf_xs-self.lbound)/(self.ubound-self.cdf_xs))
 
