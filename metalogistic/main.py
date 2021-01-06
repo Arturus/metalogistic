@@ -238,7 +238,7 @@ class MetaLogistic(stats.rv_continuous):
 
 		self.YMatrix = Y_ns[self.term]
 
-	def _quantile(self, probability):
+	def _quantile(self, probability, force_unbounded=False):
 		'''
 		The metalog inverse CDF, or quantile function, as defined in Keelin 2016, Equation 6 (unbounded case), Equation 11 (semi-bounded case),
 		and Equation 14 (bounded case).
@@ -250,13 +250,13 @@ class MetaLogistic(stats.rv_continuous):
 			raise ValueError("Probability in call to quantile() must be between 0 and 1")
 
 		if probability == 0:
-			if self.boundedness == 'lower' or self.boundedness == 'bounded':
+			if (self.boundedness == 'lower' or self.boundedness == 'bounded') and not force_unbounded:
 				return self.lbound
 			else:
 				return -np.inf
 
 		if probability == 1:
-			if self.boundedness == 'upper' or self.boundedness == 'bounded':
+			if (self.boundedness == 'upper' or self.boundedness == 'bounded') and not force_unbounded:
 				return self.ubound
 			else:
 				return np.inf
@@ -286,12 +286,13 @@ class MetaLogistic(stats.rv_continuous):
 
 		quantile_function = quantile_functions[self.term]
 
-		if self.boundedness == 'lower':
-			quantile_function = self.lbound + np.exp(quantile_function)  # Equation 11
-		if self.boundedness == 'upper':
-			quantile_function = self.ubound - np.exp(-quantile_function)
-		if self.boundedness == 'bounded':
-			quantile_function = (self.lbound+self.ubound*np.exp(quantile_function))/(1+np.exp(quantile_function))  # Equation 14
+		if not force_unbounded:
+			if self.boundedness == 'lower':
+				quantile_function = self.lbound + np.exp(quantile_function)  # Equation 11
+			if self.boundedness == 'upper':
+				quantile_function = self.ubound - np.exp(-quantile_function)
+			if self.boundedness == 'bounded':
+				quantile_function = (self.lbound+self.ubound*np.exp(quantile_function))/(1+np.exp(quantile_function))  # Equation 14
 
 		return quantile_function
 
@@ -302,6 +303,9 @@ class MetaLogistic(stats.rv_continuous):
 		Notice the unusual definition of the PDF, which is why I call this function densitySmallM in reference to the notation in
 		Keelin 2016.
 		'''
+
+		if self.isListLike(cumulative_prob):
+			return [self.densitySmallM(i) for i in cumulative_prob]
 
 		if not 0 <= cumulative_prob <= 1:
 			raise ValueError("Probability in call to densitySmallM() must be between 0 and 1")
@@ -340,14 +344,15 @@ class MetaLogistic(stats.rv_continuous):
 
 		if self.boundedness == 'lower':   # Equation 13
 			if 0<cumulative_prob<1:
-				density_function = density_function * np.exp(-self._quantile(cumulative_prob))
+				density_function = density_function * np.exp(-self._quantile(cumulative_prob, force_unbounded=True))
 			elif cumulative_prob == 0:
 				density_function = 0
 			else:
 				raise ValueError("Probability in call to densitySmallM() cannot be equal to 1 with a lower-bounded distribution.")
+
 		if self.boundedness == 'upper':
 			if 0 < cumulative_prob < 1:
-				density_function = density_function * np.exp(self._quantile(cumulative_prob))
+				density_function = density_function * np.exp(self._quantile(cumulative_prob, force_unbounded=True))
 			elif cumulative_prob == 1:
 				density_function = 0
 			else:
@@ -355,7 +360,8 @@ class MetaLogistic(stats.rv_continuous):
 
 		if self.boundedness == 'bounded':  # Equation 15
 			if 0 < cumulative_prob < 1:
-				density_function = density_function * ((1 + np.exp(self._quantile(cumulative_prob))) ** 2) / ((self.ubound - self.lbound) * np.exp(self._quantile(cumulative_prob)))
+				x_unbounded = np.exp(self._quantile(cumulative_prob, force_unbounded=True))
+				density_function = density_function * (1 + x_unbounded)**2 / ((self.ubound - self.lbound) * x_unbounded)
 			if cumulative_prob==0 or cumulative_prob==1:
 				density_function = 0
 
@@ -415,8 +421,6 @@ class MetaLogistic(stats.rv_continuous):
 		if self.isNumeric(x):
 			cumulative_prob = self.getCumulativeProb(x)
 			return self.densitySmallM(cumulative_prob)
-
-
 
 	def isNumeric(self,object):
 		return isinstance(object, (float, int)) or (isinstance(object,np.ndarray) and object.ndim==0)
