@@ -1,6 +1,7 @@
 import numpy as np
 from scipy import optimize
 from scipy import stats
+import matplotlib.pyplot as plt
 
 class MetaLogistic(stats.rv_continuous):
 	'''
@@ -422,3 +423,49 @@ class MetaLogistic(stats.rv_continuous):
 
 	def isListLike(self,object):
 		return isinstance(object, list) or (isinstance(object,np.ndarray) and object.ndim==1)
+
+	def printSummary(self):
+		print("Fit method requested:", self.fit_method_requested)
+		print("Fit method used:", self.fit_method_used)
+		print("Success:", self.success)
+		if not self.fit_method_used == 'LLS':
+			print("Solver for numeric fit:", self.numeric_ls_solver_used, )
+			print("Solver message:", self.numeric_ls_OptimizeResult.message)
+		print("Mean square error:", self.meanSquareError())
+		print('a vector:', self.a_vector)
+
+	def createCDFPlotData(self,p_from=0.0001,p_to=None):
+		if p_to is None:
+			p_to = 1-p_from
+
+		cdf_ps = np.linspace(p_from,p_to,200)
+		cdf_xs = self.quantile(cdf_ps)
+
+		return {'X-values':cdf_xs,'Probabilities':cdf_ps}
+
+	def createPDFPlotData(self, p_from=0.001, p_to=None):
+		if p_to is None:
+			p_to = 1 - p_from
+
+		pdf_ps = np.linspace(p_from, p_to, 200)
+		pdf_xs = self.quantile(pdf_ps)
+		pdf_densities = self.densitySmallM(pdf_ps)
+
+		return {'X-values': pdf_xs, 'Densities': pdf_densities}
+
+	def displayPlot(self, p_from=0.001, p_to=None):
+		fig, (cdf_axis, pdf_axis) = plt.subplots(2)
+
+		cdf_data = self.createCDFPlotData(p_from,p_to)
+		cdf_axis.plot(cdf_data['X-values'],cdf_data['Probabilities'])
+		if self.cdf_xs is not None and self.cdf_ps is not None:
+			cdf_axis.scatter(self.cdf_xs, self.cdf_ps, marker='+', color='red')
+		cdf_axis.set_title('CDF')
+
+		pdf_data = self.createPDFPlotData(p_from,p_to)
+		pdf_axis.plot(pdf_data['X-values'], pdf_data['Densities'])
+		pdf_axis.set_title('PDF')
+
+		fig.show()
+		return fig
+
