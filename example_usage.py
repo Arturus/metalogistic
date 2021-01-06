@@ -1,65 +1,18 @@
-from metalogistic import main
-import numpy as np
-import matplotlib.pyplot as plt
-from timing_decorator import timeit
+from metalogistic.main import MetaLogistic
 
-def prettyPrint(x,y): print("\n".join("{}     {}".format(x, y) for x, y in zip(x, y)))
+ps = [.15, .5, .9]
+xs = [-20, -1, 40]
 
-ps = [.35,.5,.95]
-xs = [-5, 2, 20]
+m = MetaLogistic(ps, xs, ubound=100)
 
-@timeit
-def createAndPlot():
-	m = main.MetaLogistic(ps, xs,lbound=-50)
-	ps_from = .0001
-	p = np.linspace(ps_from,1-ps_from,100)
-	x = m.ppf(p)
-	print('a vector:',m.a_vector)
-	print("Fit method used:", m.fit_method_used)
-	print("Success:",m.success)
-	return m,p,x
+m.printSummary()
+m.displayPlot()
 
-m,p,x = createAndPlot()
+cdf_probabilities = m.cdf(10)
+print("cdf() demo:", cdf_probabilities)
 
-@timeit
-def displayPlot():
-	fig,ax = plt.subplots()
-	ax.plot(x,p)
-	ax.scatter(xs, ps, marker='x')
-	plt.show()
-displayPlot()
+pdf_densities = m.pdf([10, 20, 21])
+print("pdf() demo:", pdf_densities)
 
-@timeit
-def pdf():
-	x = [1,2,10]
-	y = m.pdf(x)
-	print("PDF")
-	prettyPrint(x, y)
-
-pdf()
-
-@timeit
-def cdf():
-	x = [1,2,10]
-	y = m.cdf(x)
-	print("CDF")
-	prettyPrint(x,y)
-
-cdf()
-
-
-@timeit
-def quantile():
-	p = [.2,.5,.99]
-	x = m.ppf(p)
-	print("Quantile")
-	prettyPrint(p,x)
-
-quantile()
-
-@timeit
-def rvs():
-	s = m.rvs(size=5)
-	print('5 random samples',s)
-
-rvs()
+quantiles = m.quantile([0.8, .99])
+print("quantile() demo:", quantiles)
