@@ -2,6 +2,7 @@ import numpy as np
 from scipy import optimize
 from scipy import stats
 import matplotlib.pyplot as plt
+import warnings
 
 class MetaLogistic(stats.rv_continuous):
 	'''
@@ -19,6 +20,8 @@ class MetaLogistic(stats.rv_continuous):
 		:param ubound: Upper bound
 		:param a_vector: You may supply the a-vector directly, in which case the input data `cdf_ps` and `cdf_xs` are not used for fitting.
 		'''
+		warnings.filterwarnings("ignore", category=UserWarning, module='scipy.optimize')
+
 		super(MetaLogistic, self).__init__()
 
 		if lbound is None and ubound is None:
@@ -68,9 +71,9 @@ class MetaLogistic(stats.rv_continuous):
 		self.fitLinearLeastSquares()
 
 		# If linear least squares result is feasible
-		if MetaLogistic.aVecFeasibility(self.a_vector) == 0:
+		if self.feasibilityViaCDFSumNegative() == 0:
 			self.fit_method_used = 'LLS'
-			self.success = True
+			self.valid_distribution = True
 
 		#  If linear least squares result is not feasible
 		else:
@@ -78,11 +81,16 @@ class MetaLogistic(stats.rv_continuous):
 			if not fit_method == 'LLS':
 				self.fit_method_used = 'numeric'
 				self.fitNumericLeastSquares()
-				self.success = self.numeric_ls_OptimizeResult.success
 
 			# If only LLS is allowed, we cannot find a valid metalog
 			else:
-				self.success = False
+				self.valid_distribution = False
+
+
+		self.valid_distribution_violation = self.feasibilityViaCDFSumNegative()
+		self.valid_distribution = self.valid_distribution_violation == 0 and self.feasibilityViaPDF() == 0
+		if not self.valid_distribution:
+			print("Warning: the program was not able to fit a valid metalog distribution for your data.")
 
 
 
@@ -99,103 +107,108 @@ class MetaLogistic(stats.rv_continuous):
 		self.a_vector = np.dot(left, right)
 
 	def fitNumericLeastSquares(self):
-		def loss_function(a_candidate):
-			bounds_kwargs = {}
-			if self.lbound is not None:
-				bounds_kwargs['lbound'] = self.lbound
-			if self.ubound is not None:
-				bounds_kwargs['ubound'] = self.ubound
+		bounds_kwargs = {}
+		if self.lbound is not None:
+			bounds_kwargs['lbound'] = self.lbound
+		if self.ubound is not None:
+			bounds_kwargs['ubound'] = self.ubound
 
+		def loss_function(a_candidate):
 			# Setting a_vector in this MetaLogistic call overrides the cdf_ps and cdf_xs arguments, which are only used
 			# for meanSquareError().
-			mlog_candidate = MetaLogistic(self.cdf_ps, self.cdf_xs, **bounds_kwargs, a_vector=a_candidate)
+			return MetaLogistic(self.cdf_ps, self.cdf_xs, **bounds_kwargs, a_vector=a_candidate).meanSquareError()
 
-			return mlog_candidate.meanSquareError()
+		# Choose the method of determining feasibility
+		def feasibilityViaCDFSumNegative(a_candidate):
+			score = MetaLogistic(a_vector=a_candidate, **bounds_kwargs).feasibilityViaCDFSumNegative()
+			return score
 
-		def infeasibility_score(a_candidate):
-			return MetaLogistic.aVecFeasibility(a_candidate)
+		def feasibilityViaCDFSlopeMin(a_candidate):
+			score = MetaLogistic(a_vector=a_candidate, **bounds_kwargs).CDFSlopeNumericMin()
+			return score
 
-		feasibility_constraint = optimize.NonlinearConstraint(infeasibility_score, 0, 0)
-		optimize_kwargs = {}
-		# First, try the SLSQP solver, which is often fast and accurate
+		feasibility_constraint = optimize.NonlinearConstraint(feasibilityViaCDFSumNegative, 0, 0)
+		# feasibility_constraint = optimize.NonlinearConstraint(feasibilityViaCDFSlopeMin, 0, np.inf)
+
+		a0 = self.a_vector
+
+		# First, try the default solver, which is often fast and accurate
+		options = {}
 		optimize_results = optimize.minimize(loss_function,
-											 self.a_vector,
+											 a0,
 											 constraints=feasibility_constraint,
-											 method='SLSQP')
-		self.numeric_ls_solver_used = 'SLSQP'
+											 options=options)
+		self.numeric_ls_solver_used = 'Default'
 
-		# If the mean square error is too large, try the trust-constr solver
-		if optimize_results.fun > 0.001:
+		# If the mean square error is too large or distribution invalid, try the trust-constr solver
+		if optimize_results.fun > 0.005 or feasibilityViaCDFSumNegative(optimize_results.x)!=0:
 			options = {'xtol':1e-6}
-			optimize_results = optimize.minimize(loss_function,
-												 self.a_vector,
+			optimize_results_alternate = optimize.minimize(loss_function,
+												 a0,
 												 constraints=feasibility_constraint,
 												 method='trust-constr',
 												 options=options)
 			self.numeric_ls_solver_used = 'trust-constr'
 
-		self.a_vector = optimize_results.x
+			if optimize_results_alternate.constr_violation == 0:
+				if optimize_results_alternate.fun < optimize_results.fun:
+					optimize_results = optimize_results_alternate
+				else:
+					optimize_results = optimize_results
 
-		self.numeric_ls_OptimizeResult = optimize_results
+
+		self.a_vector = optimize_results.x
+		self.numeric_leastSQ_OptimizeResult = optimize_results
 
 	def meanSquareError(self):
 		ps_on_fitted_cdf = self.cdf(self.cdf_xs)
 		sum_sq_error = np.sum((self.cdf_ps - ps_on_fitted_cdf) ** 2)
 		return sum_sq_error/self.cdf_len
 
-	@staticmethod
-	def aVecFeasibility(a_vector):
-		'''
-		Closed-form feasibility condition on the a-vector, as defined in Keelin 2016, Equation 5.
-		Equation 5 is the derivative of Equation 6 with respect to y.
-		'''
+	def feasibilityViaCDFSumNegative(self):
+		check_ys_from = 0.001
+		number_to_check = 1000  # This parameter is very important to both performance and correctness.
+		ps_to_check = np.linspace(check_ys_from, 1 - check_ys_from, number_to_check)
+		xs_to_check = self.quantile(ps_to_check)
+		prev = -np.inf
+		infeasibility_score = 0
+		for item in xs_to_check:
+			diff = item - prev
+			if diff < 0:
+				# Logarithm of the difference, to keep this scale-free
+				infeasibility_score += np.log(1-diff)
+			prev = item
+		return infeasibility_score
 
-		# `self.a_vector` is 0-indexed, while in Keelin 2016 the a-vector is 1-indexed.
-		# To make this method as easy as possible to read if following along with the paper, I create a dictionary `a`
-		# that mimics a 1-indexed vector.
-		a = {i + 1: element for i, element in enumerate(a_vector)}
+	def feasibilityViaPDF(self):
+		check_ys_from = 0.001
+		number_to_check = 100
+		ps_to_check = np.linspace(check_ys_from, 1 - check_ys_from, number_to_check)
 
-		def series(y):
-			# TODO: verify that boundedness does not affect the feasibility condition
-			# term 2
-			series = a[2] / (y * (1 - y))
+		densities_to_check = self.densitySmallM(ps_to_check)
+		infeasibility_score = np.abs(np.sum(densities_to_check[densities_to_check<0]))
 
-			for n in range(3,len(a_vector)+1):
-				# term 3
-				if n == 3:
-					series += a[n]*((y-.5)/(y*(1-y)) + np.log(y/(1-y)))
+		return infeasibility_score
 
-				if n % 2 == 1 and n >=5:
-					'''
-					Odd terms greater than or equal to 5 in the M_n series (Eqn. 6), and their derivative w.r.t. y.
-					For calculations, see calculations.wxmx.
-					You can paste the below into a LaTeX editor.
-					
-					term = a_n(y-0.5)^{\frac{n-1}{2}}  \\
-					\frac{\partial term}{\partial y} = 0.5 a_n (n - 1) (y - 0.5)^{\frac{n - 3}{2}}
-					'''
-					series += 0.5*a[n]*(n-1)*(y-0.5)**((n-3)/2)
+	def CDFSlopeNumeric(self, p):
+		cdfSlope = optimize.approx_fprime(p,self.quantile,0.001)
+		return cdfSlope
 
-				if n % 2 == 0 and n >=6:
-					'''
-					Even terms greater than or equal to 6 in the M_n series (Eqn. 6), and their derivative w.r.t. y. 
-					For calculations, see calculations.wxmx.
-					You can paste the below into a LaTeX editor.
-					
-					term = a_n(y-0.5)^{\frac{n}{2}-1} \ln\frac{y}{1-y}  \\
-					\frac{\partial term}{\partial y} =  a_n\, \left( \frac{n}{2}-1\right) \, {{\left( y-0.5\right) }^{\frac{n}{2}-2}}
-					\log{\left( \frac{y}{1-y}\right) }+\frac{a_n\, \left( 1-y\right) \,
-					 {{\left( y-0.5\right) }^{\frac{n}{2}-1}}\, \left( \frac{y}{{{\left( 1-y\right) }^{2}}}+\frac{1}{1-y}\right) }{y}
-					'''
-					series+= a[n] * (n / 2-1) * (y-0.5)**(n / 2-2) * np.log(y / (1-y)) + (a[n] * (1-y) * (y-0.5)**(n / 2-1) * (y / (1-y)**2 + 1 / (1-y))) / y
+	def CDFSlopeNumericMin(self):
+		# Get a good initial guess
+		check_ys_from = 0.001
+		number_to_check = 100
+		ps_to_check = np.linspace(check_ys_from, 1 - check_ys_from, number_to_check)
+		xs = self.quantile(ps_to_check)
+		xs_diff = np.diff(xs)
+		i = np.argmin(xs_diff)
+		p0 = ps_to_check[i]
 
-			return series
+		# Do the minimization
+		r = optimize.minimize(self.CDFSlopeNumeric, x0=p0, bounds=[(0, 1)])
+		return self.CDFSlopeNumeric(r.x)
 
-		check_ys_from = 0.0001
-		ys_to_check = np.linspace(check_ys_from,1-check_ys_from,200)
-		series_to_check = series(ys_to_check)
-		infeasibilty_score = sum(series_to_check[series_to_check<=0])
-		return infeasibilty_score
+
 
 	def constructZVec(self):
 		'''
@@ -248,16 +261,16 @@ class MetaLogistic(stats.rv_continuous):
 		`probability` must be a scalar.
 		'''
 
-		if not 0 <= probability <= 1:
-			raise ValueError("Probability in call to quantile() must be between 0 and 1")
+		# if not 0 <= probability <= 1:
+		# 	raise ValueError("Probability in call to quantile() must be between 0 and 1")
 
-		if probability == 0:
+		if probability <= 0:
 			if (self.boundedness == 'lower' or self.boundedness == 'bounded') and not force_unbounded:
 				return self.lbound
 			else:
 				return -np.inf
 
-		if probability == 1:
+		if probability >= 1:
 			if (self.boundedness == 'upper' or self.boundedness == 'bounded') and not force_unbounded:
 				return self.ubound
 			else:
@@ -298,16 +311,17 @@ class MetaLogistic(stats.rv_continuous):
 
 		return quantile_function
 
-	def densitySmallM(self,cumulative_prob):
+	def densitySmallM(self,cumulative_prob,force_unbounded=False):
 		'''
 		This is the metalog PDF as a function of cumulative probability, as defined in Keelin 2016, Equation 9 (unbounded case),
-		Equation 13 (semi-bounded case),
+		Equation 13 (semi-bounded case).
+
 		Notice the unusual definition of the PDF, which is why I call this function densitySmallM in reference to the notation in
 		Keelin 2016.
 		'''
 
 		if self.isListLike(cumulative_prob):
-			return [self.densitySmallM(i) for i in cumulative_prob]
+			return np.asarray([self.densitySmallM(i) for i in cumulative_prob])
 
 		if not 0 <= cumulative_prob <= 1:
 			raise ValueError("Probability in call to densitySmallM() must be between 0 and 1")
@@ -343,34 +357,31 @@ class MetaLogistic(stats.rv_continuous):
 											  )
 
 		density_function = density_functions[self.term]
+		if not force_unbounded:
+			if self.boundedness == 'lower':   # Equation 13
+				if 0<cumulative_prob<1:
+					density_function = density_function * np.exp(-self._quantile(cumulative_prob, force_unbounded=True))
+				elif cumulative_prob == 0:
+					density_function = 0
+				else:
+					raise ValueError("Probability in call to densitySmallM() cannot be equal to 1 with a lower-bounded distribution.")
 
-		if self.boundedness == 'lower':   # Equation 13
-			if 0<cumulative_prob<1:
-				density_function = density_function * np.exp(-self._quantile(cumulative_prob, force_unbounded=True))
-			elif cumulative_prob == 0:
-				density_function = 0
-			else:
-				raise ValueError("Probability in call to densitySmallM() cannot be equal to 1 with a lower-bounded distribution.")
+			if self.boundedness == 'upper':
+				if 0 < cumulative_prob < 1:
+					density_function = density_function * np.exp(self._quantile(cumulative_prob, force_unbounded=True))
+				elif cumulative_prob == 1:
+					density_function = 0
+				else:
+					raise ValueError("Probability in call to densitySmallM() cannot be equal to 0 with a upper-bounded distribution.")
 
-		if self.boundedness == 'upper':
-			if 0 < cumulative_prob < 1:
-				density_function = density_function * np.exp(self._quantile(cumulative_prob, force_unbounded=True))
-			elif cumulative_prob == 1:
-				density_function = 0
-			else:
-				raise ValueError("Probability in call to densitySmallM() cannot be equal to 0 with a upper-bounded distribution.")
-
-		if self.boundedness == 'bounded':  # Equation 15
-			if 0 < cumulative_prob < 1:
-				x_unbounded = np.exp(self._quantile(cumulative_prob, force_unbounded=True))
-				density_function = density_function * (1 + x_unbounded)**2 / ((self.ubound - self.lbound) * x_unbounded)
-			if cumulative_prob==0 or cumulative_prob==1:
-				density_function = 0
+			if self.boundedness == 'bounded':  # Equation 15
+				if 0 < cumulative_prob < 1:
+					x_unbounded = np.exp(self._quantile(cumulative_prob, force_unbounded=True))
+					density_function = density_function * (1 + x_unbounded)**2 / ((self.ubound - self.lbound) * x_unbounded)
+				if cumulative_prob==0 or cumulative_prob==1:
+					density_function = 0
 
 		return density_function
-
-
-
 
 	def getCumulativeProb(self, x):
 		'''
@@ -400,7 +411,7 @@ class MetaLogistic(stats.rv_continuous):
 		`probability` may be a scalar or list-like.
 		'''
 		if self.isListLike(probability):
-			return [self._ppf(i) for i in probability]
+			return np.asarray([self._ppf(i) for i in probability])
 
 		if self.isNumeric(probability):
 			return self._quantile(probability)
@@ -424,53 +435,71 @@ class MetaLogistic(stats.rv_continuous):
 			cumulative_prob = self.getCumulativeProb(x)
 			return self.densitySmallM(cumulative_prob)
 
-	def isNumeric(self,object):
+	@staticmethod
+	def isNumeric(object):
 		return isinstance(object, (float, int)) or (isinstance(object,np.ndarray) and object.ndim==0)
 
-	def isListLike(self,object):
+	@staticmethod
+	def isListLike(object):
 		return isinstance(object, list) or (isinstance(object,np.ndarray) and object.ndim==1)
 
 	def printSummary(self):
 		print("Fit method requested:", self.fit_method_requested)
 		print("Fit method used:", self.fit_method_used)
-		print("Success:", self.success)
+		print("Distribution is valid:", self.valid_distribution)
+		if not self.valid_distribution:
+			print("Distribution validity constraint violation:", self.valid_distribution_violation)
 		if not self.fit_method_used == 'LLS':
-			print("Solver for numeric fit:", self.numeric_ls_solver_used, )
-			print("Solver message:", self.numeric_ls_OptimizeResult.message)
+			print("Solver for numeric fit:", self.numeric_ls_solver_used)
+			print("Solver convergence:", self.numeric_leastSQ_OptimizeResult.success)
+			# print("Solver convergence message:", self.numeric_leastSQ_OptimizeResult.message)
 		print("Mean square error:", self.meanSquareError())
 		print('a vector:', self.a_vector)
 
-	def createCDFPlotData(self,p_from=0.0001,p_to=None):
-		if p_to is None:
-			p_to = 1-p_from
-
-		cdf_ps = np.linspace(p_from,p_to,200)
+	def createCDFPlotData(self,p_from=0.001,p_to=0.999,n=100):
+		cdf_ps = np.linspace(p_from,p_to,n)
 		cdf_xs = self.quantile(cdf_ps)
 
 		return {'X-values':cdf_xs,'Probabilities':cdf_ps}
 
-	def createPDFPlotData(self, p_from=0.001, p_to=None):
-		if p_to is None:
-			p_to = 1 - p_from
-
-		pdf_ps = np.linspace(p_from, p_to, 200)
+	def createPDFPlotData(self, p_from=0.001, p_to=0.999, n=100):
+		pdf_ps = np.linspace(p_from, p_to, n)
 		pdf_xs = self.quantile(pdf_ps)
 		pdf_densities = self.densitySmallM(pdf_ps)
 
 		return {'X-values': pdf_xs, 'Densities': pdf_densities}
 
-	def displayPlot(self, p_from=0.001, p_to=None):
-		fig, (cdf_axis, pdf_axis) = plt.subplots(2)
+	def displayPlot(self, p_from_to=0.001, x_from_to=(None,None), n=100, hide_extreme_densities=False):
+		if isinstance(p_from_to, (float,int)):
+			p_from = p_from_to
+			p_to = 1 - p_from_to
+		if isinstance(p_from_to, tuple):
+			p_from,p_to = p_from_to
 
-		cdf_data = self.createCDFPlotData(p_from,p_to)
+		x_from, x_to = x_from_to
+		if x_from is not None and x_to is not None:
+			p_from = self.getCumulativeProb(x_from)
+			p_to = self.getCumulativeProb(x_to)
+
+		fig, (cdf_axis, pdf_axis) = plt.subplots(2)
+		fig.set_size_inches(10, 10)
+
+		cdf_data = self.createCDFPlotData(p_from,p_to,n)
 		cdf_axis.plot(cdf_data['X-values'],cdf_data['Probabilities'])
 		if self.cdf_xs is not None and self.cdf_ps is not None:
 			cdf_axis.scatter(self.cdf_xs, self.cdf_ps, marker='+', color='red')
 		cdf_axis.set_title('CDF')
 
-		pdf_data = self.createPDFPlotData(p_from,p_to)
-		pdf_axis.plot(pdf_data['X-values'], pdf_data['Densities'])
+		pdf_data = self.createPDFPlotData(p_from,p_to,n)
 		pdf_axis.set_title('PDF')
+
+		if hide_extreme_densities:
+			density50 = np.percentile(pdf_data['Densities'],50)
+			pdf_max_display = min(density50*hide_extreme_densities,1.05*max(pdf_data['Densities']))
+			pdf_axis.set_ylim(top=pdf_max_display)
+
+		pdf_axis.plot(pdf_data['X-values'], pdf_data['Densities'])
+
 
 		fig.show()
 		return fig
