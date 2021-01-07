@@ -118,16 +118,17 @@ class MetaLogistic(stats.rv_continuous):
 			# for meanSquareError().
 			return MetaLogistic(self.cdf_ps, self.cdf_xs, **bounds_kwargs, a_vector=a_candidate).meanSquareError()
 
-		# Choose the method of determining feasibility
+		# Choose the method of determining feasibility.
+		# feasibilityViaCDFSumNegative seems to work best, though I don't fully understand why.
+		# feasibilityViaPDF is the method that Keelin 2016 discusses, but it seems to work poorly with optimize.minimize.
 		def feasibilityViaCDFSumNegative(a_candidate):
 			score = MetaLogistic(a_vector=a_candidate, **bounds_kwargs).feasibilityViaCDFSumNegative()
 			return score
-
-		def feasibilityViaCDFSlopeMin(a_candidate):
-			score = MetaLogistic(a_vector=a_candidate, **bounds_kwargs).CDFSlopeNumericMin()
-			return score
-
 		feasibility_constraint = optimize.NonlinearConstraint(feasibilityViaCDFSumNegative, 0, 0)
+
+		# def feasibilityViaCDFSlopeMin(a_candidate):
+		# 	score = MetaLogistic(a_vector=a_candidate, **bounds_kwargs).CDFSlopeNumericMin()
+		# 	return score
 		# feasibility_constraint = optimize.NonlinearConstraint(feasibilityViaCDFSlopeMin, 0, np.inf)
 
 		a0 = self.a_vector
@@ -206,7 +207,7 @@ class MetaLogistic(stats.rv_continuous):
 
 		# Do the minimization
 		r = optimize.minimize(self.CDFSlopeNumeric, x0=p0, bounds=[(0, 1)])
-		return self.CDFSlopeNumeric(r.x)
+		return r.fun
 
 
 
