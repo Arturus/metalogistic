@@ -648,7 +648,7 @@ class MetaLogistic(stats.rv_continuous):
 			p_to = self.getCumulativeProb(x_to)
 
 		fig, (cdf_axis, pdf_axis) = plt.subplots(2)
-		fig.set_size_inches(10, 10)
+		# fig.set_size_inches(6, 6)
 
 		cdf_data = self.createCDFPlotData(p_from,p_to,n)
 		cdf_axis.plot(cdf_data['X-values'],cdf_data['Probabilities'])
