@@ -6,21 +6,23 @@ import warnings
 
 class MetaLogistic(stats.rv_continuous):
 	'''
+	The only class in this package.
+
 	We subclass scipy.stats.rv_continuous so we can make use of all the nice SciPy methods. We redefine the private methods
 	_cdf, _pdf, and _ppf, and SciPy will make calls to these whenever needed.
 	'''
 	def __init__(self, cdf_ps=None, cdf_xs=None, term=None, fit_method=None, lbound=None, ubound=None, a_vector=None, feasibility_method='SmallMReciprocal'):
 		'''
+		You must either provide CDF data or directly provide an a-vector. All other parameters are optional.
+
 		:param cdf_ps: Probabilities of the CDF input data.
 		:param cdf_xs: X-values of the CDF input data (the pre-images of the probabilities).
-		:param term: Produces a `term`-term metalog. Cannot be greater than the number of CDF points provided. By default, it is
-		equal to the number of CDF points.
+		:param term: Produces a `term`-term metalog. Cannot be greater than the number of CDF points provided. By default, it is equal to the number of CDF points.
 		:param fit_method: Set to 'Linear least squares' to allow linear least squares only. By default, numerical methods are tried if linear least squares fails.
 		:param lbound: Lower bound
 		:param ubound: Upper bound
 		:param a_vector: You may supply the a-vector directly, in which case the input data `cdf_ps` and `cdf_xs` are not used for fitting.
-		:param feasibility_method: The method used to determine whether an a-vector corresponds to a feasible (valid) probability distribution.
-		Its most important use is in the numerical solver, where it can have an impact on peformance and correctness.
+		:param feasibility_method: The method used to determine whether an a-vector corresponds to a feasible (valid) probability distribution. Its most important use is in the numerical solver, where it can have an impact on peformance and correctness. The options are: 'SmallMReciprocal' (default),'QuantileSumNegativeIncrements','QuantileMinimumIncrement'.
 		'''
 		warnings.filterwarnings("ignore", category=UserWarning, module='scipy.optimize')
 
