@@ -15,10 +15,12 @@ class MetaLogistic(stats.rv_continuous):
 		:param cdf_xs: X-values of the CDF input data (the pre-images of the probabilities).
 		:param term: Produces a `term`-term metalog. Cannot be greater than the number of CDF points provided. By default, it is
 		equal to the number of CDF points.
-		:param fit_method: Set to 'LLS' to allow linear least squares only. By default, numerical methods are tried if LLS fails.
+		:param fit_method: Set to 'Linear least squares' to allow linear least squares only. By default, numerical methods are tried if linear least squares fails.
 		:param lbound: Lower bound
 		:param ubound: Upper bound
 		:param a_vector: You may supply the a-vector directly, in which case the input data `cdf_ps` and `cdf_xs` are not used for fitting.
+		:param feasibility_method: The method used to determine whether an a-vector corresponds to a feasible (valid) probability distribution.
+		Its most important use is in the numerical solver, where it can have an impact on peformance and correctness.
 		'''
 		warnings.filterwarnings("ignore", category=UserWarning, module='scipy.optimize')
 
@@ -73,13 +75,13 @@ class MetaLogistic(stats.rv_continuous):
 
 		# If linear least squares result is feasible
 		if self.isFeasible():
-			self.fit_method_used = 'LLS'
+			self.fit_method_used = 'Linear least squares'
 			self.valid_distribution = True
 
 		#  If linear least squares result is not feasible
 		else:
 			# if the user allows it, use numerical least squares
-			if not fit_method == 'LLS':
+			if not fit_method == 'Linear least squares':
 				self.fit_method_used = 'numeric'
 				# TODO: set a timeout (e.g. 1 second) for the call to fitNumericLeastSquares(). If the call
 				# times out with the default feasibility method, iterate through all possible methods,
@@ -121,8 +123,7 @@ class MetaLogistic(stats.rv_continuous):
 
 	def fitLinearLeastSquares(self):
 		'''
-		Constructs the a-vector by linear least squares, as defined in Keelin 2016, Equation 7 (unbounded case), Equation 12 (semi-bounded case).
-
+		Constructs the a-vector by linear least squares, as defined in Keelin 2016, Equation 7 (unbounded case), Equation 12 (semi-bounded and bounded cases).
 		'''
 		left = np.linalg.inv(np.dot(self.YMatrix.T, self.YMatrix))
 		right = np.dot(self.YMatrix.T, self.z_vec)
@@ -130,6 +131,12 @@ class MetaLogistic(stats.rv_continuous):
 		self.a_vector = np.dot(left, right)
 
 	def fitNumericLeastSquares(self, feasibility_method):
+		'''
+		Constructs the a-vector by attempting to approximate, using numerical methods, the feasible a-vector that minimizes least squares on the CDF.
+
+		`feasibility_method` is the method by which we check whether an a-vector is feasible. It often has an important impact on the correctness and speed
+		of the numerical minimization results.
+		'''
 		bounds_kwargs = {}
 		if self.lbound is not None:
 			bounds_kwargs['lbound'] = self.lbound
@@ -203,9 +210,9 @@ class MetaLogistic(stats.rv_continuous):
 		return sum_sq_error/self.cdf_len
 
 	def infeasibilityScoreQuantileSumNegativeIncrements(self):
-		check_ys_from = 0.001
+		check_ps_from = 0.001
 		number_to_check = 200  # This parameter is very important to both performance and correctness.
-		ps_to_check = np.linspace(check_ys_from, 1 - check_ys_from, number_to_check)
+		ps_to_check = np.linspace(check_ps_from, 1 - check_ps_from, number_to_check)
 		xs_to_check = self.quantile(ps_to_check)
 		prev = -np.inf
 		infeasibility_score = 0
@@ -218,9 +225,20 @@ class MetaLogistic(stats.rv_continuous):
 		return infeasibility_score
 
 	def infeasibilityScoreSmallMReciprocal(self):
-		check_ys_from = 0.001
+		'''
+		Checks whether the a-vector is feasible using the reciprocal of the small-m PDF, as defined in Keelin 2016, Equation 5 (see also equation 10).
+		This check is performed for an array of probabilities; all reciprocals-of-densities that are negative (corresponding to an invalid distribution, since a density
+		must be non-negative) are summed together into a score that attempts to quantify to what degree the a-vector is infeasible. This captures how much of the
+		PDF is negative, and how far below 0 it is.
+
+		As Keelin notes, Equations 5 and 10 are equivalent, i.e. reciprocals of densities will be positive whenever densities are positive, and so this method would return
+		0 for all and only the same inputs, if we checked densities instead of reciprocals (i.e. if we omitted `densities_reciprocal = 1/densities_to_check`). However, using the reciprocal
+		seems to be more amenable to finding feasible a-vectors with scipy.optimize.minimize; this might be because the reciprocal (Equation 5) is linear in the elements of the
+		a-vector.
+		'''
+		check_ps_from = 0.001
 		number_to_check = 100
-		ps_to_check = np.linspace(check_ys_from, 1 - check_ys_from, number_to_check)
+		ps_to_check = np.linspace(check_ps_from, 1 - check_ps_from, number_to_check)
 
 		densities_to_check = self.densitySmallM(ps_to_check)
 		densities_reciprocal = 1/densities_to_check
@@ -228,15 +246,20 @@ class MetaLogistic(stats.rv_continuous):
 
 		return infeasibility_score
 
-	def CDFSlopeNumeric(self, p):
+	def QuantileSlopeNumeric(self, p):
+		'''
+		Gets the slope of the quantile function by simple finite-difference approximation.
+		'''
 		epsilon = 1e-5
 		if not np.isfinite(self.quantile(p+epsilon)):
 			epsilon = -epsilon
-
 		cdfSlope = optimize.approx_fprime(p,self.quantile,epsilon)
 		return cdfSlope
 
 	def QuantileMinimumIncrement(self):
+		'''
+		Nice idea but in practise the worst feasibility method, I might remove it.
+		'''
 		# Get a good initial guess
 		check_ys_from = 0.001
 		number_to_check = 100
@@ -247,14 +270,12 @@ class MetaLogistic(stats.rv_continuous):
 		p0 = ps_to_check[i]
 
 		# Do the minimization
-		r = optimize.minimize(self.CDFSlopeNumeric, x0=p0, bounds=[(0, 1)])
+		r = optimize.minimize(self.QuantileSlopeNumeric, x0=p0, bounds=[(0, 1)])
 		return r.fun
-
-
 
 	def constructZVec(self):
 		'''
-		Constructs the z-vector, as defined in Keelin 2016, Section 3.3. (unbounded case, where it is called the `x`-vector),
+		Constructs the z-vector, as defined in Keelin 2016, Section 3.3 (unbounded case, where it is called the `x`-vector),
 		Section 4.1 (semi-bounded case), and Section 4.3 (bounded case).
 
 		This vector is a transformation of cdf_xs to account for bounded or semi-bounded distributions.
@@ -274,7 +295,7 @@ class MetaLogistic(stats.rv_continuous):
 		Constructs the Y-matrix, as defined in Keelin 2016, Equation 8.
 		'''
 
-		# The series of Y_n matrices. Although we only return the last matrix in the series, the entire series is necessary to construct it
+		# The series of Y_n matrices. Although we only use the last matrix in the series, the entire series is necessary to construct it
 		Y_ns = {}
 		ones = np.ones(self.cdf_len).reshape(self.cdf_len, 1)
 		column_2 = np.log(self.cdf_ps / (1 - self.cdf_ps)).reshape(self.cdf_len, 1)
@@ -295,7 +316,7 @@ class MetaLogistic(stats.rv_continuous):
 
 		self.YMatrix = Y_ns[self.term]
 
-	def _quantile(self, probability, force_unbounded=False):
+	def quantile(self, probability, force_unbounded=False):
 		'''
 		The metalog inverse CDF, or quantile function, as defined in Keelin 2016, Equation 6 (unbounded case), Equation 11 (semi-bounded case),
 		and Equation 14 (bounded case).
@@ -305,6 +326,9 @@ class MetaLogistic(stats.rv_continuous):
 
 		# if not 0 <= probability <= 1:
 		# 	raise ValueError("Probability in call to quantile() must be between 0 and 1")
+
+		if self.isListLike(probability):
+			return np.asarray([self.quantile(i) for i in probability])
 
 		if probability <= 0:
 			if (self.boundedness == 'lower' or self.boundedness == 'bounded') and not force_unbounded:
@@ -356,7 +380,7 @@ class MetaLogistic(stats.rv_continuous):
 	def densitySmallM(self,cumulative_prob,force_unbounded=False):
 		'''
 		This is the metalog PDF as a function of cumulative probability, as defined in Keelin 2016, Equation 9 (unbounded case),
-		Equation 13 (semi-bounded case).
+		Equation 13 (semi-bounded case), Equation 15 (bounded case).
 
 		Notice the unusual definition of the PDF, which is why I call this function densitySmallM in reference to the notation in
 		Keelin 2016.
@@ -402,7 +426,7 @@ class MetaLogistic(stats.rv_continuous):
 		if not force_unbounded:
 			if self.boundedness == 'lower':   # Equation 13
 				if 0<cumulative_prob<1:
-					density_function = density_function * np.exp(-self._quantile(cumulative_prob, force_unbounded=True))
+					density_function = density_function * np.exp(-self.quantile(cumulative_prob, force_unbounded=True))
 				elif cumulative_prob == 0:
 					density_function = 0
 				else:
@@ -410,7 +434,7 @@ class MetaLogistic(stats.rv_continuous):
 
 			if self.boundedness == 'upper':
 				if 0 < cumulative_prob < 1:
-					density_function = density_function * np.exp(self._quantile(cumulative_prob, force_unbounded=True))
+					density_function = density_function * np.exp(self.quantile(cumulative_prob, force_unbounded=True))
 				elif cumulative_prob == 1:
 					density_function = 0
 				else:
@@ -418,7 +442,7 @@ class MetaLogistic(stats.rv_continuous):
 
 			if self.boundedness == 'bounded':  # Equation 15
 				if 0 < cumulative_prob < 1:
-					x_unbounded = np.exp(self._quantile(cumulative_prob, force_unbounded=True))
+					x_unbounded = np.exp(self.quantile(cumulative_prob, force_unbounded=True))
 					density_function = density_function * (1 + x_unbounded)**2 / ((self.ubound - self.lbound) * x_unbounded)
 				if cumulative_prob==0 or cumulative_prob==1:
 					density_function = 0
@@ -432,7 +456,7 @@ class MetaLogistic(stats.rv_continuous):
 
 		`x` must be a scalar
 		'''
-		f_to_zero = lambda probability: self._quantile(probability) - x
+		f_to_zero = lambda probability: self.quantile(probability) - x
 		return optimize.brentq(f_to_zero, 0, 1, disp=True)
 
 	def _cdf(self, x):
@@ -448,21 +472,12 @@ class MetaLogistic(stats.rv_continuous):
 
 	def _ppf(self, probability):
 		'''
-		This is where we override the SciPy method for the inverse CDF or quantile function (ppf stands for percent point function)
+		This is where we override the SciPy method for the inverse CDF or quantile function (ppf stands for percent point function).
 
 		`probability` may be a scalar or list-like.
 		'''
-		if self.isListLike(probability):
-			return np.asarray([self._ppf(i) for i in probability])
+		return self.quantile(probability)
 
-		if self.isNumeric(probability):
-			return self._quantile(probability)
-
-	def quantile(self, probability):
-		'''
-		An alias for ppf, because 'percent point function' is somewhat non-standard terminology
-		'''
-		return self._ppf(probability)
 
 	def _pdf(self, x):
 		'''
@@ -486,13 +501,12 @@ class MetaLogistic(stats.rv_continuous):
 		return isinstance(object, list) or (isinstance(object,np.ndarray) and object.ndim==1)
 
 	def printSummary(self):
-		# print("Fit method requested:", self.fit_method_requested)
 		print("Fit method used:", self.fit_method_used)
 		print("Distribution is valid:", self.valid_distribution)
 		print("Method for determining distribution validity:", self.feasibility_method)
 		if not self.valid_distribution:
 			print("Distribution validity constraint violation:", self.valid_distribution_violation)
-		if not self.fit_method_used == 'LLS':
+		if not self.fit_method_used == 'Linear least squares':
 			print("Solver for numeric fit:", self.numeric_ls_solver_used)
 			print("Solver convergence:", self.numeric_leastSQ_OptimizeResult.success)
 			# print("Solver convergence message:", self.numeric_leastSQ_OptimizeResult.message)
@@ -513,6 +527,13 @@ class MetaLogistic(stats.rv_continuous):
 		return {'X-values': pdf_xs, 'Densities': pdf_densities}
 
 	def displayPlot(self, p_from_to=0.001, x_from_to=(None,None), n=100, hide_extreme_densities=50):
+		'''
+		The parameter `hide_extreme_densities` is used on the PDF plot, to set its y-axis maximum to `hide_extreme_densities` times
+		the median density. This is because, when given extreme input data, the resulting metalog might have very short but extremely tall spikes in the PDF
+		(where the maximum density might be in the hundreds), which would make the PDF plot unreadable if the entire spike was included.
+
+		If both `p_from_to` and `x_from_to` are specified, `p_from_to` is overridden.
+		'''
 		if isinstance(p_from_to, (float,int)):
 			p_from = p_from_to
 			p_to = 1 - p_from_to
@@ -542,7 +563,6 @@ class MetaLogistic(stats.rv_continuous):
 			pdf_axis.set_ylim(top=pdf_max_display)
 
 		pdf_axis.plot(pdf_data['X-values'], pdf_data['Densities'])
-
 
 		fig.show()
 		return fig
