@@ -11,7 +11,16 @@ class MetaLogistic(stats.rv_continuous):
 	We subclass scipy.stats.rv_continuous so we can make use of all the nice SciPy methods. We redefine the private methods
 	_cdf, _pdf, and _ppf, and SciPy will make calls to these whenever needed.
 	'''
-	def __init__(self, cdf_ps=None, cdf_xs=None, term=None, fit_method=None, lbound=None, ubound=None, a_vector=None, feasibility_method='SmallMReciprocal'):
+	def __init__(self,
+				 cdf_ps=None,
+				 cdf_xs=None,
+				 term=None,
+				 fit_method=None,
+				 lbound=None,
+				 ubound=None,
+				 a_vector=None,
+				 feasibility_method='SmallMReciprocal',
+				 validate_inputs=True):
 		'''
 		You must either provide CDF data or directly provide an a-vector. All other parameters are optional.
 
@@ -25,6 +34,26 @@ class MetaLogistic(stats.rv_continuous):
 		:param feasibility_method: The method used to determine whether an a-vector corresponds to a feasible (valid) probability distribution. Its most important use is in the numerical solver, where it can have an impact on peformance and correctness. The options are: 'SmallMReciprocal' (default),'QuantileSumNegativeIncrements','QuantileMinimumIncrement'.
 		'''
 		super(MetaLogistic, self).__init__()
+
+		if validate_inputs:
+			self.validateInputs(
+				cdf_ps=cdf_ps,
+				cdf_xs=cdf_xs,
+				term=term,
+				fit_method=fit_method,
+				lbound=lbound,
+				ubound=ubound,
+				a_vector=a_vector,
+				feasibility_method=feasibility_method
+			)
+
+		if lbound == -np.inf:
+			print("Infinite lower bound was ignored")
+			lbound = None
+
+		if ubound == np.inf:
+			print("Infinite upper bound was ignored")
+			ubound = None
 
 		if lbound is None and ubound is None:
 			self.boundedness = False
@@ -44,7 +73,6 @@ class MetaLogistic(stats.rv_continuous):
 		self.cdf_ps = cdf_ps
 		self.cdf_xs = cdf_xs
 		if cdf_xs is not None and cdf_ps is not None:
-			self.cdf_p_x_mapping = {cdf_ps[i]: cdf_xs[i] for i in range(len(cdf_ps))}
 			self.cdf_len = len(cdf_ps)
 			self.cdf_ps = np.asarray(self.cdf_ps)
 			self.cdf_xs = np.asarray(self.cdf_xs)
@@ -58,8 +86,6 @@ class MetaLogistic(stats.rv_continuous):
 				self.term = term
 			return
 
-		if len(cdf_ps) != len(cdf_ps):
-			raise ValueError("cdf_ps and cdf_xs must have the same length")
 
 		if term is None:
 			self.term = self.cdf_len
@@ -99,6 +125,78 @@ class MetaLogistic(stats.rv_continuous):
 		if not self.isFeasible():
 			print("Warning: the program was not able to fit a valid metalog distribution for your data.")
 
+
+	def validateInputs(self,
+			cdf_ps,
+			cdf_xs,
+			term,
+			fit_method,
+			lbound,
+			ubound,
+			a_vector,
+			feasibility_method):
+
+		def checkPsXs(array, name):
+			if self.isListLike(array):
+				for item in array:
+					if not self.isNumeric(item):
+						raise ValueError(name+" must be an array of numbers")
+			else:
+				raise ValueError(name + " must be an array of numbers")
+
+		if cdf_xs is not None:
+			checkPsXs(cdf_xs, 'cdf_xs')
+			cdf_xs = np.asarray(cdf_xs)
+
+		if cdf_ps is not None:
+			checkPsXs(cdf_ps,'cdf_ps')
+			cdf_ps = np.asarray(cdf_ps)
+
+			if np.any(cdf_ps<0) or np.any(cdf_ps>1):
+				raise ValueError("Probabilities must be between 0 and 1")
+
+		if cdf_ps is not None and cdf_xs is not None:
+			if len(cdf_ps) != len(cdf_xs):
+				raise ValueError("cdf_ps and cdf_xs must have the same length")
+
+			if len(cdf_ps)<2:
+				raise ValueError("Must provide at least two CDF data points")
+
+			ps_xs_sorted = sorted(zip(cdf_ps, cdf_xs))
+			prev = -np.inf
+			for tuple in ps_xs_sorted:
+				p,x = tuple
+				if x<=prev:
+					print("Warning: Non-increasing CDF input data. Are you sure?")
+				prev = x
+
+			if term is not None:
+				if term > len(cdf_ps):
+					raise ValueError("term cannot be greater than the number of CDF data points provided")
+
+		if term is not None:
+			if term<3:
+				raise ValueError("term cannot be less than 3. Just use the logistic distribution, no need to go meta!")
+
+		if a_vector is not None and term is not None:
+			if term>len(a_vector):
+				raise ValueError("term cannot be greater than the length of the a_vector")
+
+		if fit_method is not None:
+			if fit_method not in ['Linear least squares']:
+				raise ValueError("Unknown fit method")
+
+		if lbound is not None:
+			if lbound>min(cdf_ps):
+				raise ValueError("Lower bound cannot be greater than the lowest data point")
+
+		if ubound is not None:
+			if ubound < max(cdf_xs):
+				raise ValueError("Upper bound cannot be less than the greatest data point")
+
+		feasibility_methods = ['SmallMReciprocal','QuantileSumNegativeIncrements','QuantileMinimumIncrement']
+		if not feasibility_method in feasibility_methods:
+			raise ValueError("feasibility_method must be one of: "+str(feasibility_methods))
 
 	def isFeasible(self):
 		if self.feasibility_method == 'QuantileMinimumIncrement':
@@ -148,17 +246,17 @@ class MetaLogistic(stats.rv_continuous):
 		def loss_function(a_candidate):
 			# Setting a_vector in this MetaLogistic call overrides the cdf_ps and cdf_xs arguments, which are only used
 			# for meanSquareError().
-			return MetaLogistic(self.cdf_ps, self.cdf_xs, **bounds_kwargs, a_vector=a_candidate).meanSquareError()
+			return MetaLogistic(self.cdf_ps, self.cdf_xs, **bounds_kwargs, a_vector=a_candidate, validate_inputs=False).meanSquareError()
 
 		# Choose the method of determining feasibility.
 		def feasibilityViaCDFSumNegative(a_candidate):
-			return MetaLogistic(a_vector=a_candidate, **bounds_kwargs).infeasibilityScoreQuantileSumNegativeIncrements()
+			return MetaLogistic(a_vector=a_candidate, **bounds_kwargs, validate_inputs=False).infeasibilityScoreQuantileSumNegativeIncrements()
 
 		def feasibilityViaQuantileMinimumIncrement(a_candidate):
-			return MetaLogistic(a_vector=a_candidate, **bounds_kwargs).QuantileMinimumIncrement()
+			return MetaLogistic(a_vector=a_candidate, **bounds_kwargs, validate_inputs=False).QuantileMinimumIncrement()
 
 		def feasibilityViaSmallMReciprocal(a_candidate):
-			return MetaLogistic(a_vector=a_candidate, **bounds_kwargs).infeasibilityScoreSmallMReciprocal()
+			return MetaLogistic(a_vector=a_candidate, **bounds_kwargs, validate_inputs=False).infeasibilityScoreSmallMReciprocal()
 
 		if feasibility_method == 'SmallMReciprocal':
 			def feasibilityBool(a_candidate):
@@ -355,7 +453,8 @@ class MetaLogistic(stats.rv_continuous):
 		quantile_functions = {}
 
 		quantile_functions[2] = a[1] + a[2] * ln_p_term
-		quantile_functions[3] = quantile_functions[2] + a[3] * p05_term * ln_p_term
+		if self.term>2:
+			quantile_functions[3] = quantile_functions[2] + a[3] * p05_term * ln_p_term
 		if self.term>3:
 			quantile_functions[4] = quantile_functions[3] + a[4] * p05_term
 
@@ -410,7 +509,8 @@ class MetaLogistic(stats.rv_continuous):
 		p1p_term = cumulative_prob*(1-cumulative_prob)
 
 		density_functions[2] = p1p_term/a[2]
-		density_functions[3] = 1/(1/density_functions[2] + a[3]*(p05_term/p1p_term+ln_p_term))
+		if self.term>2:
+			density_functions[3] = 1/(1/density_functions[2] + a[3]*(p05_term/p1p_term+ln_p_term))
 		if self.term>3:
 			density_functions[4] = 1/(1/density_functions[3] + a[4])
 
