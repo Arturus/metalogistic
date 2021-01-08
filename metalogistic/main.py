@@ -24,8 +24,6 @@ class MetaLogistic(stats.rv_continuous):
 		:param a_vector: You may supply the a-vector directly, in which case the input data `cdf_ps` and `cdf_xs` are not used for fitting.
 		:param feasibility_method: The method used to determine whether an a-vector corresponds to a feasible (valid) probability distribution. Its most important use is in the numerical solver, where it can have an impact on peformance and correctness. The options are: 'SmallMReciprocal' (default),'QuantileSumNegativeIncrements','QuantileMinimumIncrement'.
 		'''
-		warnings.filterwarnings("ignore", category=UserWarning, module='scipy.optimize')
-
 		super(MetaLogistic, self).__init__()
 
 		if lbound is None and ubound is None:
@@ -90,7 +88,9 @@ class MetaLogistic(stats.rv_continuous):
 				# keeping the best result. This is because, in my experience, if a method will succeed, it succeeds
 				# within hundreds of milliseconds; if it's been going on for more than a second, another method will likely give
 				# good results faster.
-				self.fitNumericLeastSquares(feasibility_method=self.feasibility_method)
+				with warnings.catch_warnings():
+					warnings.filterwarnings("ignore", category=UserWarning, module='scipy.optimize')
+					self.fitNumericLeastSquares(feasibility_method=self.feasibility_method)
 
 			# If only LLS is allowed, we cannot find a valid metalog
 			else:
