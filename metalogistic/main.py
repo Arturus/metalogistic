@@ -9,7 +9,7 @@ class MetaLogistic(stats.rv_continuous):
 	We subclass scipy.stats.rv_continuous so we can make use of all the nice SciPy methods. We redefine the private methods
 	_cdf, _pdf, and _ppf, and SciPy will make calls to these whenever needed.
 	'''
-	def __init__(self, cdf_ps=None, cdf_xs=None, term=None, fit_method=None, lbound=None, ubound=None, a_vector=None):
+	def __init__(self, cdf_ps=None, cdf_xs=None, term=None, fit_method=None, lbound=None, ubound=None, a_vector=None, feasibility_method='SmallMReciprocal'):
 		'''
 		:param cdf_ps: Probabilities of the CDF input data.
 		:param cdf_xs: X-values of the CDF input data (the pre-images of the probabilities).
@@ -37,6 +37,7 @@ class MetaLogistic(stats.rv_continuous):
 
 		self.fit_method_requested = fit_method
 		self.numeric_ls_solver_used = None
+		self.feasibility_method = feasibility_method
 
 		self.cdf_ps = cdf_ps
 		self.cdf_xs = cdf_xs
@@ -71,7 +72,7 @@ class MetaLogistic(stats.rv_continuous):
 		self.fitLinearLeastSquares()
 
 		# If linear least squares result is feasible
-		if self.feasibilityViaCDFSumNegative() == 0:
+		if self.isFeasible():
 			self.fit_method_used = 'LLS'
 			self.valid_distribution = True
 
@@ -80,20 +81,42 @@ class MetaLogistic(stats.rv_continuous):
 			# if the user allows it, use numerical least squares
 			if not fit_method == 'LLS':
 				self.fit_method_used = 'numeric'
-				self.fitNumericLeastSquares()
+				# TODO: set a timeout (e.g. 1 second) for the call to fitNumericLeastSquares(). If the call
+				# times out with the default feasibility method, iterate through all possible methods,
+				# keeping the best result. This is because, in my experience, if a method will succeed, it succeeds
+				# within hundreds of milliseconds; if it's been going on for more than a second, another method will likely give
+				# good results faster.
+				self.fitNumericLeastSquares(feasibility_method=self.feasibility_method)
 
 			# If only LLS is allowed, we cannot find a valid metalog
 			else:
 				self.valid_distribution = False
 
-
-		self.valid_distribution_violation = self.feasibilityViaCDFSumNegative()
-		self.valid_distribution = self.valid_distribution_violation == 0 and self.feasibilityViaPDF() == 0
-		if not self.valid_distribution:
+		if not self.isFeasible():
 			print("Warning: the program was not able to fit a valid metalog distribution for your data.")
 
 
+	def isFeasible(self):
+		if self.feasibility_method == 'QuantileMinimumIncrement':
+			s = self.QuantileMinimumIncrement()
+			if s<0:
+				self.valid_distribution_violation = s
+				self.valid_distribution = False
+			else:
+				self.valid_distribution_violation = 0
+				self.valid_distribution = True
 
+		if self.feasibility_method == 'QuantileSumNegativeIncrements':
+			s = self.infeasibilityScoreQuantileSumNegativeIncrements()
+			self.valid_distribution_violation = s
+			self.valid_distribution = s==0
+
+		if self.feasibility_method == 'SmallMReciprocal':
+			s = self.infeasibilityScoreSmallMReciprocal()
+			self.valid_distribution_violation = s
+			self.valid_distribution = s==0
+
+		return self.valid_distribution
 
 
 	def fitLinearLeastSquares(self):
@@ -106,7 +129,7 @@ class MetaLogistic(stats.rv_continuous):
 
 		self.a_vector = np.dot(left, right)
 
-	def fitNumericLeastSquares(self):
+	def fitNumericLeastSquares(self, feasibility_method):
 		bounds_kwargs = {}
 		if self.lbound is not None:
 			bounds_kwargs['lbound'] = self.lbound
@@ -119,17 +142,29 @@ class MetaLogistic(stats.rv_continuous):
 			return MetaLogistic(self.cdf_ps, self.cdf_xs, **bounds_kwargs, a_vector=a_candidate).meanSquareError()
 
 		# Choose the method of determining feasibility.
-		# feasibilityViaCDFSumNegative seems to work best, though I don't fully understand why.
-		# feasibilityViaPDF is the method that Keelin 2016 discusses, but it seems to work poorly with optimize.minimize.
 		def feasibilityViaCDFSumNegative(a_candidate):
-			score = MetaLogistic(a_vector=a_candidate, **bounds_kwargs).feasibilityViaCDFSumNegative()
-			return score
-		feasibility_constraint = optimize.NonlinearConstraint(feasibilityViaCDFSumNegative, 0, 0)
+			return MetaLogistic(a_vector=a_candidate, **bounds_kwargs).infeasibilityScoreQuantileSumNegativeIncrements()
 
-		# def feasibilityViaCDFSlopeMin(a_candidate):
-		# 	score = MetaLogistic(a_vector=a_candidate, **bounds_kwargs).CDFSlopeNumericMin()
-		# 	return score
-		# feasibility_constraint = optimize.NonlinearConstraint(feasibilityViaCDFSlopeMin, 0, np.inf)
+		def feasibilityViaQuantileMinimumIncrement(a_candidate):
+			return MetaLogistic(a_vector=a_candidate, **bounds_kwargs).QuantileMinimumIncrement()
+
+		def feasibilityViaSmallMReciprocal(a_candidate):
+			return MetaLogistic(a_vector=a_candidate, **bounds_kwargs).infeasibilityScoreSmallMReciprocal()
+
+		if feasibility_method == 'SmallMReciprocal':
+			def feasibilityBool(a_candidate):
+				return feasibilityViaSmallMReciprocal(a_candidate) == 0
+			feasibility_constraint = optimize.NonlinearConstraint(feasibilityViaSmallMReciprocal, 0, 0)
+
+		if feasibility_method == 'QuantileSumNegativeIncrements':
+			def feasibilityBool(a_candidate):
+				return feasibilityViaCDFSumNegative(a_candidate) == 0
+			feasibility_constraint = optimize.NonlinearConstraint(feasibilityViaCDFSumNegative, 0, 0)
+
+		if feasibility_method == 'QuantileMinimumIncrement':
+			def feasibilityBool(a_candidate):
+				return feasibilityViaQuantileMinimumIncrement(a_candidate) >= 0
+			feasibility_constraint = optimize.NonlinearConstraint(feasibilityViaQuantileMinimumIncrement, 0, np.inf)
 
 		a0 = self.a_vector
 
@@ -142,8 +177,9 @@ class MetaLogistic(stats.rv_continuous):
 		self.numeric_ls_solver_used = 'Default'
 
 		# If the mean square error is too large or distribution invalid, try the trust-constr solver
-		if optimize_results.fun > 0.005 or feasibilityViaCDFSumNegative(optimize_results.x)!=0:
+		if optimize_results.fun > 0.01 or not feasibilityBool(optimize_results.x):
 			options = {'xtol':1e-6}
+			a0 = optimize_results.x
 			optimize_results_alternate = optimize.minimize(loss_function,
 												 a0,
 												 constraints=feasibility_constraint,
@@ -166,9 +202,9 @@ class MetaLogistic(stats.rv_continuous):
 		sum_sq_error = np.sum((self.cdf_ps - ps_on_fitted_cdf) ** 2)
 		return sum_sq_error/self.cdf_len
 
-	def feasibilityViaCDFSumNegative(self):
+	def infeasibilityScoreQuantileSumNegativeIncrements(self):
 		check_ys_from = 0.001
-		number_to_check = 1000  # This parameter is very important to both performance and correctness.
+		number_to_check = 200  # This parameter is very important to both performance and correctness.
 		ps_to_check = np.linspace(check_ys_from, 1 - check_ys_from, number_to_check)
 		xs_to_check = self.quantile(ps_to_check)
 		prev = -np.inf
@@ -181,21 +217,26 @@ class MetaLogistic(stats.rv_continuous):
 			prev = item
 		return infeasibility_score
 
-	def feasibilityViaPDF(self):
+	def infeasibilityScoreSmallMReciprocal(self):
 		check_ys_from = 0.001
 		number_to_check = 100
 		ps_to_check = np.linspace(check_ys_from, 1 - check_ys_from, number_to_check)
 
 		densities_to_check = self.densitySmallM(ps_to_check)
-		infeasibility_score = np.abs(np.sum(densities_to_check[densities_to_check<0]))
+		densities_reciprocal = 1/densities_to_check
+		infeasibility_score = np.abs(np.sum(densities_reciprocal[densities_reciprocal<0]))
 
 		return infeasibility_score
 
 	def CDFSlopeNumeric(self, p):
-		cdfSlope = optimize.approx_fprime(p,self.quantile,0.001)
+		epsilon = 1e-5
+		if not np.isfinite(self.quantile(p+epsilon)):
+			epsilon = -epsilon
+
+		cdfSlope = optimize.approx_fprime(p,self.quantile,epsilon)
 		return cdfSlope
 
-	def CDFSlopeNumericMin(self):
+	def QuantileMinimumIncrement(self):
 		# Get a good initial guess
 		check_ys_from = 0.001
 		number_to_check = 100
@@ -445,9 +486,10 @@ class MetaLogistic(stats.rv_continuous):
 		return isinstance(object, list) or (isinstance(object,np.ndarray) and object.ndim==1)
 
 	def printSummary(self):
-		print("Fit method requested:", self.fit_method_requested)
+		# print("Fit method requested:", self.fit_method_requested)
 		print("Fit method used:", self.fit_method_used)
 		print("Distribution is valid:", self.valid_distribution)
+		print("Method for determining distribution validity:", self.feasibility_method)
 		if not self.valid_distribution:
 			print("Distribution validity constraint violation:", self.valid_distribution_violation)
 		if not self.fit_method_used == 'LLS':
@@ -470,7 +512,7 @@ class MetaLogistic(stats.rv_continuous):
 
 		return {'X-values': pdf_xs, 'Densities': pdf_densities}
 
-	def displayPlot(self, p_from_to=0.001, x_from_to=(None,None), n=100, hide_extreme_densities=False):
+	def displayPlot(self, p_from_to=0.001, x_from_to=(None,None), n=100, hide_extreme_densities=50):
 		if isinstance(p_from_to, (float,int)):
 			p_from = p_from_to
 			p_to = 1 - p_from_to
