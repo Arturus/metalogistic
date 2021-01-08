@@ -1,9 +1,10 @@
 from metalogistic.main import MetaLogistic
 
+# Example 1
 ps = [.15, .5, .9]
 xs = [-20, -1, 40]
 
-m = MetaLogistic(ps, xs, ubound=100)
+m = MetaLogistic(ps, xs)
 
 m.printSummary()
 m.displayPlot()
@@ -16,3 +17,25 @@ print("pdf() demo:", pdf_densities)
 
 quantiles = m.quantile([0.8, .99])
 print("quantile() demo:", quantiles)
+
+# Example 2
+print('\n')
+
+ps = [.1, .5, .9]
+xs = [-20, -1, 120]
+
+m = MetaLogistic(ps, xs)
+
+m.printSummary()
+m.displayPlot(hide_extreme_densities=10)
+
+# Example 3
+print('\n')
+
+ps = [.07,.15, .5, .9]
+xs = [-35,-20, -1, 50]
+
+m = MetaLogistic(ps, xs, ubound=70)
+
+m.printSummary()
+m.displayPlot(x_from_to=(-100,60))
