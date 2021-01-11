@@ -233,7 +233,7 @@ class MetaLogistic(stats.rv_continuous):
 
 		self.a_vector = np.dot(left, right)
 
-	def fitNumericLeastSquares(self, feasibility_method):
+	def fitNumericLeastSquares(self, feasibility_method, avoid_extreme_steepness=True):
 		'''
 		Constructs the a-vector by attempting to approximate, using numerical methods, the feasible a-vector that minimizes least squares on the CDF.
 
@@ -305,7 +305,34 @@ class MetaLogistic(stats.rv_continuous):
 
 
 		self.a_vector = optimize_results.x
+		if avoid_extreme_steepness: self.avoidExtremeSteepness()
 		self.numeric_leastSQ_OptimizeResult = optimize_results
+
+	def avoidExtremeSteepness(self):
+		'''
+		Since we are using numerical approximations to determine feasibility,
+		the feasible distribution that most closely fits the data may actually be just barely infeasible.
+
+		A hint that this is the case is that an extremely large spike in PDF will result,
+		with densities in the tens of thousands! (If we were able to evaluate the PDF
+		everywhere, we would see that it is actually negative in a tiny region).
+
+		We can avoid secretly-infeasible a-vectors by biasing the *last* a-parameter very slightly (by 1%) towards zero when
+		PDF steepness is extreme, which will usually guarantee that the distribution is feasible,
+		at a very small cost to goodness of fit.
+		'''
+		steepness = self.pdfMax()
+		if steepness > 10:
+			self.a_vector = np.append(self.a_vector[0:-1], self.a_vector[-1] * 99 / 100)
+
+	def pdfMax(self):
+		'''
+		Find a very rough approximation of the max of the PDF. Used for penalizing extremely steep distributions.
+		'''
+		check_ps_from = 0.001
+		number_to_check = 100
+		ps_to_check = np.linspace(check_ps_from, 1 - check_ps_from, number_to_check)
+		return max(self.densitySmallM(ps_to_check))
 
 	def meanSquareError(self):
 		ps_on_fitted_cdf = self.cdf(self.cdf_xs)
