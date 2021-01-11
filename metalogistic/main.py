@@ -98,10 +98,10 @@ class MetaLogistic(stats.rv_continuous):
 
 		#  Try linear least squares
 		self.fitLinearLeastSquares()
+		self.fit_method_used = 'Linear least squares'
 
 		# If linear least squares result is feasible
 		if self.isFeasible():
-			self.fit_method_used = 'Linear least squares'
 			self.valid_distribution = True
 
 		#  If linear least squares result is not feasible
