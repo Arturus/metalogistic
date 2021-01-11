@@ -298,8 +298,9 @@ class MetaLogistic(stats.rv_continuous):
 
 		# If the mean square error is too large or distribution invalid, try the trust-constr solver
 		if optimize_results.fun > 0.01 or not feasibilityBool(optimize_results.x):
-			options = {'xtol':1e-6}
-			a0 = optimize_results.x
+			options = {'xtol': 1e-6,  # this improves speed considerably vs the default of 1e-8
+					   'maxiter': 300  # give up if taking too long
+					   }
 			optimize_results_alternate = optimize.minimize(loss_function,
 												 a0,
 												 constraints=feasibility_constraint,
