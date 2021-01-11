@@ -591,7 +591,7 @@ class MetaLogistic(stats.rv_continuous):
 					density_functions[n] = 1/(1/density_functions[n-1]+ a[n]*((n-1)/2)*p05_term**((n-3)/2))
 
 				if n % 2 == 0:
-					density_functions[n] = 1/(1/density_functions[n-1] + a[n](p05_term**(n/2-1)/p1p_term +
+					density_functions[n] = 1/(1/density_functions[n-1] + a[n]*(p05_term**(n/2-1)/p1p_term +
 																			  (n/2-1)*p05_term**(n/2-2)*ln_p_term)
 											  )
 
