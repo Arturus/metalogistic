@@ -190,7 +190,7 @@ class MetaLogistic(stats.rv_continuous):
 				raise ValueError("Unknown fit method")
 
 		if lbound is not None:
-			if lbound>min(cdf_ps):
+			if lbound>min(cdf_xs):
 				raise ValueError("Lower bound cannot be greater than the lowest data point")
 
 		if ubound is not None:
