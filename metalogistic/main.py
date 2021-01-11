@@ -59,10 +59,13 @@ class MetaLogistic(stats.rv_continuous):
 			self.boundedness = False
 		if lbound is None and ubound is not None:
 			self.boundedness = 'upper'
+			self.a , self.b = -np.inf, ubound
 		if lbound is not None and ubound is None:
 			self.boundedness = 'lower'
+			self.a, self.b = lbound, np.inf
 		if lbound is not None and ubound is not None:
 			self.boundedness = 'bounded'
+			self.a, self.b = lbound, ubound
 		self.lbound = lbound
 		self.ubound = ubound
 
