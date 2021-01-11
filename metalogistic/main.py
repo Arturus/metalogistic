@@ -3,6 +3,8 @@ from scipy import optimize
 from scipy import stats
 import matplotlib.pyplot as plt
 import warnings
+from . import support
+cache = {}
 
 class MetaLogistic(stats.rv_continuous):
 	'''
@@ -276,6 +278,14 @@ class MetaLogistic(stats.rv_continuous):
 				return feasibilityViaQuantileMinimumIncrement(a_candidate) >= 0
 			feasibility_constraint = optimize.NonlinearConstraint(feasibilityViaQuantileMinimumIncrement, 0, np.inf)
 
+		shifted = self.findShiftedValue((tuple(self.cdf_ps),tuple(self.cdf_xs),self.lbound,self.ubound), cache)
+		if shifted:
+			optimize_result,shift_distance = shifted
+			self.a_vector = np.append(optimize_result.x[0]+shift_distance, optimize_result.x[1:])
+			self.numeric_leastSQ_OptimizeResult = None
+			if avoid_extreme_steepness: self.avoidExtremeSteepness()
+			return
+
 		a0 = self.a_vector
 
 		# First, try the default solver, which is often fast and accurate
@@ -303,7 +313,7 @@ class MetaLogistic(stats.rv_continuous):
 				else:
 					optimize_results = optimize_results
 
-
+		cache[(tuple(self.cdf_ps), tuple(self.cdf_xs), self.lbound, self.ubound)] = optimize_results
 		self.a_vector = optimize_results.x
 		if avoid_extreme_steepness: self.avoidExtremeSteepness()
 		self.numeric_leastSQ_OptimizeResult = optimize_results
@@ -333,6 +343,36 @@ class MetaLogistic(stats.rv_continuous):
 		number_to_check = 100
 		ps_to_check = np.linspace(check_ps_from, 1 - check_ps_from, number_to_check)
 		return max(self.densitySmallM(ps_to_check))
+
+	@staticmethod
+	def findShiftedValue(input_tuple, cache):
+		if not cache:
+			return False
+		for cache_tuple, cache_value in cache.items():
+			shifted = MetaLogistic.isSameShifted(support.tupleToDict(cache_tuple), support.tupleToDict(input_tuple))
+			if shifted:
+				return cache_value,shifted
+		return False
+
+	@staticmethod
+	def isSameShifted(dict1,dict2):
+		bounds = [dict1['lbound'], dict2['lbound'], dict1['ubound'], dict2['ubound']]
+		if any([i is not None for i in bounds]):
+			return False
+
+		if not dict1['cdf_ps'] == dict2['cdf_ps']:
+			return False
+
+		dict1Xsorted = sorted(dict1['cdf_xs'])
+		dict2Xsorted = sorted(dict2['cdf_xs'])
+
+		diffdelta = np.abs(np.diff(dict1Xsorted) - np.diff(dict2Xsorted))
+		diffdelta_relative = diffdelta/dict1Xsorted[1:]
+		print(diffdelta_relative)
+		if np.all(diffdelta_relative < .005): # I believe this is necessary because of the imprecision of dragging in d3.js
+			return dict2Xsorted[0]-dict1Xsorted[0]
+		else:
+			return False
 
 	def meanSquareError(self):
 		ps_on_fitted_cdf = self.cdf(self.cdf_xs)
