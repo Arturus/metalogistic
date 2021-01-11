@@ -408,7 +408,7 @@ class MetaLogistic(stats.rv_continuous):
 		a-vector.
 		'''
 		check_ps_from = 0.001
-		number_to_check = 100
+		number_to_check = 100  # Some light empirical testing suggests 100 may be a good value here.
 		ps_to_check = np.linspace(check_ps_from, 1 - check_ps_from, number_to_check)
 
 		densities_to_check = self.densitySmallM(ps_to_check)
@@ -432,9 +432,9 @@ class MetaLogistic(stats.rv_continuous):
 		Nice idea but in practise the worst feasibility method, I might remove it.
 		'''
 		# Get a good initial guess
-		check_ys_from = 0.001
+		check_ps_from = 0.001
 		number_to_check = 100
-		ps_to_check = np.linspace(check_ys_from, 1 - check_ys_from, number_to_check)
+		ps_to_check = np.linspace(check_ps_from, 1 - check_ps_from, number_to_check)
 		xs = self.quantile(ps_to_check)
 		xs_diff = np.diff(xs)
 		i = np.argmin(xs_diff)
@@ -667,7 +667,7 @@ class MetaLogistic(stats.rv_continuous):
 
 	@staticmethod
 	def isNumeric(object):
-		return isinstance(object, (float, int)) or (isinstance(object,np.ndarray) and object.ndim==0)
+		return isinstance(object, (float, int, np.int32, np.int64)) or (isinstance(object,np.ndarray) and object.ndim==0)
 
 	@staticmethod
 	def isListLike(object):
