@@ -686,20 +686,32 @@ class MetaLogistic(stats.rv_continuous):
 		print("Mean square error:", self.meanSquareError())
 		print('a vector:', self.a_vector)
 
-	def createCDFPlotData(self,p_from=0.001,p_to=0.999,n=100):
+	def createCDFPlotData(self,p_from_to=(.001,.999), x_from_to=(None,None),n=100):
+		p_from, p_to = p_from_to
+		x_from, x_to = x_from_to
+		if x_from is not None and x_to is not None:
+			p_from = self.getCumulativeProb(x_from)
+			p_to = self.getCumulativeProb(x_to)
+
 		cdf_ps = np.linspace(p_from,p_to,n)
 		cdf_xs = self.quantile(cdf_ps)
 
 		return {'X-values':cdf_xs,'Probabilities':cdf_ps}
 
-	def createPDFPlotData(self, p_from=0.001, p_to=0.999, n=100):
+	def createPDFPlotData(self, p_from_to=(.001,.999), x_from_to=(None,None), n=100):
+		p_from, p_to = p_from_to
+		x_from, x_to = x_from_to
+		if x_from is not None and x_to is not None:
+			p_from = self.getCumulativeProb(x_from)
+			p_to = self.getCumulativeProb(x_to)
+
 		pdf_ps = np.linspace(p_from, p_to, n)
 		pdf_xs = self.quantile(pdf_ps)
 		pdf_densities = self.densitySmallM(pdf_ps)
 
 		return {'X-values': pdf_xs, 'Densities': pdf_densities}
 
-	def displayPlot(self, p_from_to=0.001, x_from_to=(None,None), n=100, hide_extreme_densities=50):
+	def displayPlot(self, p_from_to=(.001,.999), x_from_to=(None,None), n=100, hide_extreme_densities=50):
 		'''
 		The parameter `hide_extreme_densities` is used on the PDF plot, to set its y-axis maximum to `hide_extreme_densities` times
 		the median density. This is because, when given extreme input data, the resulting metalog might have very short but extremely tall spikes in the PDF
@@ -707,12 +719,8 @@ class MetaLogistic(stats.rv_continuous):
 
 		If both `p_from_to` and `x_from_to` are specified, `p_from_to` is overridden.
 		'''
-		if isinstance(p_from_to, (float,int)):
-			p_from = p_from_to
-			p_to = 1 - p_from_to
-		if isinstance(p_from_to, tuple):
-			p_from,p_to = p_from_to
 
+		p_from, p_to = p_from_to
 		x_from, x_to = x_from_to
 		if x_from is not None and x_to is not None:
 			p_from = self.getCumulativeProb(x_from)
@@ -721,13 +729,13 @@ class MetaLogistic(stats.rv_continuous):
 		fig, (cdf_axis, pdf_axis) = plt.subplots(2)
 		# fig.set_size_inches(6, 6)
 
-		cdf_data = self.createCDFPlotData(p_from,p_to,n)
+		cdf_data = self.createCDFPlotData(p_from_to=(p_from,p_to),n=n)
 		cdf_axis.plot(cdf_data['X-values'],cdf_data['Probabilities'])
 		if self.cdf_xs is not None and self.cdf_ps is not None:
 			cdf_axis.scatter(self.cdf_xs, self.cdf_ps, marker='+', color='red')
 		cdf_axis.set_title('CDF')
 
-		pdf_data = self.createPDFPlotData(p_from,p_to,n)
+		pdf_data = self.createPDFPlotData(p_from_to=(p_from,p_to),n=n)
 		pdf_axis.set_title('PDF')
 
 		if hide_extreme_densities:
