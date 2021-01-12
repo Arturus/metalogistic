@@ -4,6 +4,7 @@ from scipy import stats
 import matplotlib.pyplot as plt
 import warnings
 from . import support
+
 cache = {}
 
 class MetaLogistic(stats.rv_continuous):
@@ -142,9 +143,9 @@ class MetaLogistic(stats.rv_continuous):
 			feasibility_method):
 
 		def checkPsXs(array, name):
-			if self.isListLike(array):
+			if support.isListLike(array):
 				for item in array:
-					if not self.isNumeric(item):
+					if not support.isNumeric(item):
 						raise ValueError(name+" must be an array of numbers")
 			else:
 				raise ValueError(name + " must be an array of numbers")
@@ -369,7 +370,6 @@ class MetaLogistic(stats.rv_continuous):
 
 		diffdelta = np.abs(np.diff(dict1Xsorted) - np.diff(dict2Xsorted))
 		diffdelta_relative = diffdelta/dict1Xsorted[1:]
-		print(diffdelta_relative)
 		if np.all(diffdelta_relative < .005): # I believe this is necessary because of the imprecision of dragging in d3.js
 			return dict2Xsorted[0]-dict1Xsorted[0]
 		else:
@@ -498,7 +498,7 @@ class MetaLogistic(stats.rv_continuous):
 		# if not 0 <= probability <= 1:
 		# 	raise ValueError("Probability in call to quantile() must be between 0 and 1")
 
-		if self.isListLike(probability):
+		if support.isListLike(probability):
 			return np.asarray([self.quantile(i) for i in probability])
 
 		if probability <= 0:
@@ -558,7 +558,7 @@ class MetaLogistic(stats.rv_continuous):
 		Keelin 2016.
 		'''
 
-		if self.isListLike(cumulative_prob):
+		if support.isListLike(cumulative_prob):
 			return np.asarray([self.densitySmallM(i) for i in cumulative_prob])
 
 		if not 0 <= cumulative_prob <= 1:
@@ -638,9 +638,9 @@ class MetaLogistic(stats.rv_continuous):
 
 		`x` may be a scalar or list-like.
 		'''
-		if self.isListLike(x):
+		if support.isListLike(x):
 			return [self._cdf(i) for i in x]
-		if self.isNumeric(x):
+		if support.isNumeric(x):
 			return self.getCumulativeProb(x)
 
 	def _ppf(self, probability):
@@ -658,20 +658,12 @@ class MetaLogistic(stats.rv_continuous):
 
 		`x` may be a scalar or list-like.
 		'''
-		if self.isListLike(x):
+		if support.isListLike(x):
 			return [self._pdf(i) for i in x]
 
-		if self.isNumeric(x):
+		if support.isNumeric(x):
 			cumulative_prob = self.getCumulativeProb(x)
 			return self.densitySmallM(cumulative_prob)
-
-	@staticmethod
-	def isNumeric(object):
-		return isinstance(object, (float, int, np.int32, np.int64)) or (isinstance(object,np.ndarray) and object.ndim==0)
-
-	@staticmethod
-	def isListLike(object):
-		return isinstance(object, list) or (isinstance(object,np.ndarray) and object.ndim==1)
 
 	def printSummary(self):
 		print("Fit method used:", self.fit_method_used)
