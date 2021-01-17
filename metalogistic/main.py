@@ -3,6 +3,9 @@ from scipy import optimize
 from scipy import stats
 import matplotlib.pyplot as plt
 import warnings
+from . import support
+
+cache = {}
 
 class MetaLogistic(stats.rv_continuous):
 	'''
@@ -59,10 +62,13 @@ class MetaLogistic(stats.rv_continuous):
 			self.boundedness = False
 		if lbound is None and ubound is not None:
 			self.boundedness = 'upper'
+			self.a , self.b = -np.inf, ubound
 		if lbound is not None and ubound is None:
 			self.boundedness = 'lower'
+			self.a, self.b = lbound, np.inf
 		if lbound is not None and ubound is not None:
 			self.boundedness = 'bounded'
+			self.a, self.b = lbound, ubound
 		self.lbound = lbound
 		self.ubound = ubound
 
@@ -98,10 +104,10 @@ class MetaLogistic(stats.rv_continuous):
 
 		#  Try linear least squares
 		self.fitLinearLeastSquares()
+		self.fit_method_used = 'Linear least squares'
 
 		# If linear least squares result is feasible
 		if self.isFeasible():
-			self.fit_method_used = 'Linear least squares'
 			self.valid_distribution = True
 
 		#  If linear least squares result is not feasible
@@ -137,9 +143,9 @@ class MetaLogistic(stats.rv_continuous):
 			feasibility_method):
 
 		def checkPsXs(array, name):
-			if self.isListLike(array):
+			if support.isListLike(array):
 				for item in array:
-					if not self.isNumeric(item):
+					if not support.isNumeric(item):
 						raise ValueError(name+" must be an array of numbers")
 			else:
 				raise ValueError(name + " must be an array of numbers")
@@ -187,7 +193,7 @@ class MetaLogistic(stats.rv_continuous):
 				raise ValueError("Unknown fit method")
 
 		if lbound is not None:
-			if lbound>min(cdf_ps):
+			if lbound>min(cdf_xs):
 				raise ValueError("Lower bound cannot be greater than the lowest data point")
 
 		if ubound is not None:
@@ -230,7 +236,7 @@ class MetaLogistic(stats.rv_continuous):
 
 		self.a_vector = np.dot(left, right)
 
-	def fitNumericLeastSquares(self, feasibility_method):
+	def fitNumericLeastSquares(self, feasibility_method, avoid_extreme_steepness=True):
 		'''
 		Constructs the a-vector by attempting to approximate, using numerical methods, the feasible a-vector that minimizes least squares on the CDF.
 
@@ -273,6 +279,14 @@ class MetaLogistic(stats.rv_continuous):
 				return feasibilityViaQuantileMinimumIncrement(a_candidate) >= 0
 			feasibility_constraint = optimize.NonlinearConstraint(feasibilityViaQuantileMinimumIncrement, 0, np.inf)
 
+		shifted = self.findShiftedValue((tuple(self.cdf_ps),tuple(self.cdf_xs),self.lbound,self.ubound), cache)
+		if shifted:
+			optimize_result,shift_distance = shifted
+			self.a_vector = np.append(optimize_result.x[0]+shift_distance, optimize_result.x[1:])
+			self.numeric_leastSQ_OptimizeResult = None
+			if avoid_extreme_steepness: self.avoidExtremeSteepness()
+			return
+
 		a0 = self.a_vector
 
 		# First, try the default solver, which is often fast and accurate
@@ -285,8 +299,9 @@ class MetaLogistic(stats.rv_continuous):
 
 		# If the mean square error is too large or distribution invalid, try the trust-constr solver
 		if optimize_results.fun > 0.01 or not feasibilityBool(optimize_results.x):
-			options = {'xtol':1e-6}
-			a0 = optimize_results.x
+			options = {'xtol': 1e-6,  # this improves speed considerably vs the default of 1e-8
+					   'maxiter': 300  # give up if taking too long
+					   }
 			optimize_results_alternate = optimize.minimize(loss_function,
 												 a0,
 												 constraints=feasibility_constraint,
@@ -300,9 +315,65 @@ class MetaLogistic(stats.rv_continuous):
 				else:
 					optimize_results = optimize_results
 
-
+		cache[(tuple(self.cdf_ps), tuple(self.cdf_xs), self.lbound, self.ubound)] = optimize_results
 		self.a_vector = optimize_results.x
+		if avoid_extreme_steepness: self.avoidExtremeSteepness()
 		self.numeric_leastSQ_OptimizeResult = optimize_results
+
+	def avoidExtremeSteepness(self):
+		'''
+		Since we are using numerical approximations to determine feasibility,
+		the feasible distribution that most closely fits the data may actually be just barely infeasible.
+
+		A hint that this is the case is that an extremely large spike in PDF will result,
+		with densities in the tens of thousands! (If we were able to evaluate the PDF
+		everywhere, we would see that it is actually negative in a tiny region).
+
+		We can avoid secretly-infeasible a-vectors by biasing the *last* a-parameter very slightly (by 1%) towards zero when
+		PDF steepness is extreme, which will usually guarantee that the distribution is feasible,
+		at a very small cost to goodness of fit.
+		'''
+		steepness = self.pdfMax()
+		if steepness > 10:
+			self.a_vector = np.append(self.a_vector[0:-1], self.a_vector[-1] * 99 / 100)
+
+	def pdfMax(self):
+		'''
+		Find a very rough approximation of the max of the PDF. Used for penalizing extremely steep distributions.
+		'''
+		check_ps_from = 0.001
+		number_to_check = 100
+		ps_to_check = np.linspace(check_ps_from, 1 - check_ps_from, number_to_check)
+		return max(self.densitySmallM(ps_to_check))
+
+	@staticmethod
+	def findShiftedValue(input_tuple, cache):
+		if not cache:
+			return False
+		for cache_tuple, cache_value in cache.items():
+			shifted = MetaLogistic.isSameShifted(support.tupleToDict(cache_tuple), support.tupleToDict(input_tuple))
+			if shifted:
+				return cache_value,shifted
+		return False
+
+	@staticmethod
+	def isSameShifted(dict1,dict2):
+		bounds = [dict1['lbound'], dict2['lbound'], dict1['ubound'], dict2['ubound']]
+		if any([i is not None for i in bounds]):
+			return False
+
+		if not dict1['cdf_ps'] == dict2['cdf_ps']:
+			return False
+
+		dict1Xsorted = sorted(dict1['cdf_xs'])
+		dict2Xsorted = sorted(dict2['cdf_xs'])
+
+		diffdelta = np.abs(np.diff(dict1Xsorted) - np.diff(dict2Xsorted))
+		diffdelta_relative = diffdelta/dict1Xsorted[1:]
+		if np.all(diffdelta_relative < .005): # I believe this is necessary because of the imprecision of dragging in d3.js
+			return dict2Xsorted[0]-dict1Xsorted[0]
+		else:
+			return False
 
 	def meanSquareError(self):
 		ps_on_fitted_cdf = self.cdf(self.cdf_xs)
@@ -337,7 +408,7 @@ class MetaLogistic(stats.rv_continuous):
 		a-vector.
 		'''
 		check_ps_from = 0.001
-		number_to_check = 100
+		number_to_check = 100  # Some light empirical testing suggests 100 may be a good value here.
 		ps_to_check = np.linspace(check_ps_from, 1 - check_ps_from, number_to_check)
 
 		densities_to_check = self.densitySmallM(ps_to_check)
@@ -361,9 +432,9 @@ class MetaLogistic(stats.rv_continuous):
 		Nice idea but in practise the worst feasibility method, I might remove it.
 		'''
 		# Get a good initial guess
-		check_ys_from = 0.001
+		check_ps_from = 0.001
 		number_to_check = 100
-		ps_to_check = np.linspace(check_ys_from, 1 - check_ys_from, number_to_check)
+		ps_to_check = np.linspace(check_ps_from, 1 - check_ps_from, number_to_check)
 		xs = self.quantile(ps_to_check)
 		xs_diff = np.diff(xs)
 		i = np.argmin(xs_diff)
@@ -427,7 +498,7 @@ class MetaLogistic(stats.rv_continuous):
 		# if not 0 <= probability <= 1:
 		# 	raise ValueError("Probability in call to quantile() must be between 0 and 1")
 
-		if self.isListLike(probability):
+		if support.isListLike(probability):
 			return np.asarray([self.quantile(i) for i in probability])
 
 		if probability <= 0:
@@ -487,7 +558,7 @@ class MetaLogistic(stats.rv_continuous):
 		Keelin 2016.
 		'''
 
-		if self.isListLike(cumulative_prob):
+		if support.isListLike(cumulative_prob):
 			return np.asarray([self.densitySmallM(i) for i in cumulative_prob])
 
 		if not 0 <= cumulative_prob <= 1:
@@ -520,7 +591,7 @@ class MetaLogistic(stats.rv_continuous):
 					density_functions[n] = 1/(1/density_functions[n-1]+ a[n]*((n-1)/2)*p05_term**((n-3)/2))
 
 				if n % 2 == 0:
-					density_functions[n] = 1/(1/density_functions[n-1] + a[n](p05_term**(n/2-1)/p1p_term +
+					density_functions[n] = 1/(1/density_functions[n-1] + a[n]*(p05_term**(n/2-1)/p1p_term +
 																			  (n/2-1)*p05_term**(n/2-2)*ln_p_term)
 											  )
 
@@ -567,9 +638,9 @@ class MetaLogistic(stats.rv_continuous):
 
 		`x` may be a scalar or list-like.
 		'''
-		if self.isListLike(x):
+		if support.isListLike(x):
 			return [self._cdf(i) for i in x]
-		if self.isNumeric(x):
+		if support.isNumeric(x):
 			return self.getCumulativeProb(x)
 
 	def _ppf(self, probability):
@@ -587,20 +658,12 @@ class MetaLogistic(stats.rv_continuous):
 
 		`x` may be a scalar or list-like.
 		'''
-		if self.isListLike(x):
+		if support.isListLike(x):
 			return [self._pdf(i) for i in x]
 
-		if self.isNumeric(x):
+		if support.isNumeric(x):
 			cumulative_prob = self.getCumulativeProb(x)
 			return self.densitySmallM(cumulative_prob)
-
-	@staticmethod
-	def isNumeric(object):
-		return isinstance(object, (float, int)) or (isinstance(object,np.ndarray) and object.ndim==0)
-
-	@staticmethod
-	def isListLike(object):
-		return isinstance(object, list) or (isinstance(object,np.ndarray) and object.ndim==1)
 
 	def printSummary(self):
 		print("Fit method used:", self.fit_method_used)
@@ -615,20 +678,32 @@ class MetaLogistic(stats.rv_continuous):
 		print("Mean square error:", self.meanSquareError())
 		print('a vector:', self.a_vector)
 
-	def createCDFPlotData(self,p_from=0.001,p_to=0.999,n=100):
+	def createCDFPlotData(self,p_from_to=(.001,.999), x_from_to=(None,None),n=100):
+		p_from, p_to = p_from_to
+		x_from, x_to = x_from_to
+		if x_from is not None and x_to is not None:
+			p_from = self.getCumulativeProb(x_from)
+			p_to = self.getCumulativeProb(x_to)
+
 		cdf_ps = np.linspace(p_from,p_to,n)
 		cdf_xs = self.quantile(cdf_ps)
 
 		return {'X-values':cdf_xs,'Probabilities':cdf_ps}
 
-	def createPDFPlotData(self, p_from=0.001, p_to=0.999, n=100):
+	def createPDFPlotData(self, p_from_to=(.001,.999), x_from_to=(None,None), n=100):
+		p_from, p_to = p_from_to
+		x_from, x_to = x_from_to
+		if x_from is not None and x_to is not None:
+			p_from = self.getCumulativeProb(x_from)
+			p_to = self.getCumulativeProb(x_to)
+
 		pdf_ps = np.linspace(p_from, p_to, n)
 		pdf_xs = self.quantile(pdf_ps)
 		pdf_densities = self.densitySmallM(pdf_ps)
 
 		return {'X-values': pdf_xs, 'Densities': pdf_densities}
 
-	def displayPlot(self, p_from_to=0.001, x_from_to=(None,None), n=100, hide_extreme_densities=50):
+	def displayPlot(self, p_from_to=(.001,.999), x_from_to=(None,None), n=100, hide_extreme_densities=50):
 		'''
 		The parameter `hide_extreme_densities` is used on the PDF plot, to set its y-axis maximum to `hide_extreme_densities` times
 		the median density. This is because, when given extreme input data, the resulting metalog might have very short but extremely tall spikes in the PDF
@@ -636,12 +711,8 @@ class MetaLogistic(stats.rv_continuous):
 
 		If both `p_from_to` and `x_from_to` are specified, `p_from_to` is overridden.
 		'''
-		if isinstance(p_from_to, (float,int)):
-			p_from = p_from_to
-			p_to = 1 - p_from_to
-		if isinstance(p_from_to, tuple):
-			p_from,p_to = p_from_to
 
+		p_from, p_to = p_from_to
 		x_from, x_to = x_from_to
 		if x_from is not None and x_to is not None:
 			p_from = self.getCumulativeProb(x_from)
@@ -650,13 +721,13 @@ class MetaLogistic(stats.rv_continuous):
 		fig, (cdf_axis, pdf_axis) = plt.subplots(2)
 		# fig.set_size_inches(6, 6)
 
-		cdf_data = self.createCDFPlotData(p_from,p_to,n)
+		cdf_data = self.createCDFPlotData(p_from_to=(p_from,p_to),n=n)
 		cdf_axis.plot(cdf_data['X-values'],cdf_data['Probabilities'])
 		if self.cdf_xs is not None and self.cdf_ps is not None:
 			cdf_axis.scatter(self.cdf_xs, self.cdf_ps, marker='+', color='red')
 		cdf_axis.set_title('CDF')
 
-		pdf_data = self.createPDFPlotData(p_from,p_to,n)
+		pdf_data = self.createPDFPlotData(p_from_to=(p_from,p_to),n=n)
 		pdf_axis.set_title('PDF')
 
 		if hide_extreme_densities:
