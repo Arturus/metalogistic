@@ -352,7 +352,7 @@ class MetaLogistic(stats.rv_continuous):
 			return False
 		for cache_tuple, cache_value in cache.items():
 			shifted = MetaLogistic.isSameShifted(support.tupleToDict(cache_tuple), support.tupleToDict(input_tuple))
-			if shifted:
+			if shifted is not False:
 				return cache_value,shifted
 		return False
 
