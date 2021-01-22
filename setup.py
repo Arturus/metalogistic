@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setuptools.setup(
     name="metalogistic",
-    version="0.0.2",
+    version="0.0.3",
     author="Thomas Adamczewski",
     author_email="tmkadamcz@gmail.com",
     description="A Python package for the metalogistic distribution. The metalogistic or metalog distribution is a highly flexible probability distribution that can be used to model data without traditional parameters.",
