@@ -28,9 +28,11 @@ which lets us use their many convenient, performant methods.
  
 
 # Usage
+
 ```python
 from metalogistic import MetaLogistic
-my_metalog = MetaLogistic(cdf_xs=[-5, 2, 20],cdf_ps=[.35,.5,.95])
+
+my_metalog = MetaLogistic(cdf_xs=[-5, 2, 20], cdf_ps=[.35, .5, .95])
 
 # These methods can take scalars or arrays/lists/vectors
 my_metalog.cdf(10)
@@ -38,8 +40,8 @@ my_metalog.pdf([10, 20, 21])
 my_metalog.quantile([0.8, .99])
 
 # These methods conveniently display useful information
-my_metalog.printSummary()
-my_metalog.displayPlot()
+my_metalog.print_summary()
+my_metalog.display_plot()
 ```
 
 See also `example_usage.py`
