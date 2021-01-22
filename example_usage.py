@@ -6,8 +6,8 @@ xs = [-20, -1, 40]
 
 m = MetaLogistic(ps, xs)
 
-m.printSummary()
-m.displayPlot()
+m.print_summary()
+m.display_plot()
 
 cdf_probabilities = m.cdf(10)
 print("cdf() demo:", cdf_probabilities)
@@ -26,8 +26,8 @@ xs = [-20, -1, 120]
 
 m = MetaLogistic(ps, xs)
 
-m.printSummary()
-m.displayPlot(hide_extreme_densities=10)
+m.print_summary()
+m.display_plot(hide_extreme_densities=10)
 
 # Example 3
 print('\n')
@@ -37,5 +37,5 @@ xs = [-35,-20, -1, 50]
 
 m = MetaLogistic(ps, xs, ubound=70)
 
-m.printSummary()
-m.displayPlot(x_from_to=(-100,60))
+m.print_summary()
+m.display_plot(x_from_to=(-100, 60))

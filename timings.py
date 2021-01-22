@@ -24,8 +24,8 @@ def doFit(cdf_ps, cdf_xs, lbound=None, ubound=None):
 
 @timeit
 def createPlotData(mlog_oject):
-	mlog_oject.createCDFPlotData()
-	mlog_oject.createPDFPlotData()
+	mlog_oject.create_cdf_plot_data()
+	mlog_oject.create_pdf_plot_data()
 
 
 
@@ -39,7 +39,7 @@ def doAll(cdf_ps, cdf_xs, lbound=None, ubound=None):
 	m = doFit(cdf_ps,cdf_xs,lbound,ubound)
 	createPlotData(m)
 	print("\nSummary printout:")
-	m.printSummary()
+	m.print_summary()
 
 ps = [.15, .5, .9]
 xs = [-20, -1, 40]
