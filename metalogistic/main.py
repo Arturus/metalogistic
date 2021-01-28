@@ -351,7 +351,7 @@ class MetaLogistic(stats.rv_continuous):
 		check_ps_from = 0.001
 		number_to_check = 100
 		ps_to_check = np.linspace(check_ps_from, 1 - check_ps_from, number_to_check)
-		return max(self.densitySmallM(ps_to_check))
+		return max(self.density_m(ps_to_check))
 
 	@staticmethod
 	def find_shifted_value(input_tuple, cache):
@@ -418,7 +418,7 @@ class MetaLogistic(stats.rv_continuous):
 		number_to_check = 100  # Some light empirical testing suggests 100 may be a good value here.
 		ps_to_check = np.linspace(check_ps_from, 1 - check_ps_from, number_to_check)
 
-		densities_to_check = self.densitySmallM(ps_to_check)
+		densities_to_check = self.density_m(ps_to_check)
 		densities_reciprocal = 1 / densities_to_check
 		infeasibility_score = np.abs(np.sum(densities_reciprocal[densities_reciprocal < 0]))
 
@@ -555,22 +555,22 @@ class MetaLogistic(stats.rv_continuous):
 
 		return quantile_function
 
-	def densitySmallM(self, cumulative_prob, force_unbounded=False):
+	def density_m(self, cumulative_prob, force_unbounded=False):
 		"""
 		This is the metalog PDF as a function of cumulative probability, as defined in Keelin 2016, Equation 9 (unbounded case),
 		Equation 13 (semi-bounded case), Equation 15 (bounded case).
 
-		Notice the unusual definition of the PDF, which is why I call this function densitySmallM in reference to the notation in
+		Notice the unusual definition of the PDF, which is why I call this function density_m in reference to the notation in
 		Keelin 2016.
 		"""
 
 		if support.is_list_like(cumulative_prob):
-			return np.asarray([self.densitySmallM(i) for i in cumulative_prob])
+			return np.asarray([self.density_m(i) for i in cumulative_prob])
 
 		if not 0 <= cumulative_prob <= 1:
-			raise ValueError("Probability in call to densitySmallM() must be between 0 and 1")
+			raise ValueError("Probability in call to density_m() must be between 0 and 1")
 		if not self.boundedness and (cumulative_prob == 0 or cumulative_prob == 1):
-			raise ValueError("Probability in call to densitySmallM() cannot be equal to 0 and 1 for an unbounded distribution")
+			raise ValueError("Probability in call to density_m() cannot be equal to 0 and 1 for an unbounded distribution")
 
 		# The series of density functions. Although we only return the last result in the series, the entire series is necessary to construct it
 		density_functions = {}
@@ -607,7 +607,7 @@ class MetaLogistic(stats.rv_continuous):
 				elif cumulative_prob == 0:
 					density_function = 0
 				else:
-					raise ValueError("Probability in call to densitySmallM() cannot be equal to 1 with a lower-bounded distribution.")
+					raise ValueError("Probability in call to density_m() cannot be equal to 1 with a lower-bounded distribution.")
 
 			if self.boundedness == 'upper':
 				if 0 < cumulative_prob < 1:
@@ -615,7 +615,7 @@ class MetaLogistic(stats.rv_continuous):
 				elif cumulative_prob == 1:
 					density_function = 0
 				else:
-					raise ValueError("Probability in call to densitySmallM() cannot be equal to 0 with a upper-bounded distribution.")
+					raise ValueError("Probability in call to density_m() cannot be equal to 0 with a upper-bounded distribution.")
 
 			if self.boundedness == 'bounded':  # Equation 15
 				if 0 < cumulative_prob < 1:
@@ -666,7 +666,7 @@ class MetaLogistic(stats.rv_continuous):
 
 		if support.is_numeric(x):
 			cumulative_prob = self.get_cumulative_prob(x)
-			return self.densitySmallM(cumulative_prob)
+			return self.density_m(cumulative_prob)
 
 	def print_summary(self):
 		print("Fit method used:", self.fit_method_used)
@@ -702,7 +702,7 @@ class MetaLogistic(stats.rv_continuous):
 
 		pdf_ps = np.linspace(p_from, p_to, n)
 		pdf_xs = self.quantile(pdf_ps)
-		pdf_densities = self.densitySmallM(pdf_ps)
+		pdf_densities = self.density_m(pdf_ps)
 
 		return {'X-values': pdf_xs, 'Densities': pdf_densities}
 
