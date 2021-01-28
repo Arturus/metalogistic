@@ -651,7 +651,10 @@ class MetaLogistic(stats.rv_continuous):
 		`x` must be a scalar
 		"""
 		f_to_zero = lambda probability: self.quantile(probability) - x
-		return optimize.brentq(f_to_zero, 0, 1, disp=True)
+
+		# We need a smaller `xtol` than the default value, in order to ensure correctness when
+		# evaluating the CDF or PDF in the extreme tails.
+		return optimize.brentq(f_to_zero, 0, 1, xtol=1e-24, disp=True)
 
 	def _cdf(self, x):
 		"""
