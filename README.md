@@ -89,3 +89,6 @@ Timings:
 'doFit'  1035.46 ms
 'createPlotData'  6.98 ms
 ```
+
+# License
+If AGPL is a problem for you, please [contact me](https://tadamcz.com/). As I am currently the sole author, we can probably work something out.
