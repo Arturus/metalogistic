@@ -4,6 +4,7 @@ from scipy import stats
 import matplotlib.pyplot as plt
 import warnings
 from . import support
+from decimal import Decimal
 
 cache = {}
 
@@ -264,23 +265,39 @@ class MetaLogistic(stats.rv_continuous):
 		def feasibility_via_small_m_reciprocal(a_candidate):
 			return MetaLogistic(a_vector=a_candidate, **bounds_kwargs, validate_inputs=False).infeasibility_score_m_reciprocal()
 
-		if feasibility_method == 'SmallMReciprocal':
+		if self.is_symmetric_percentile_triplet():
+			k0 = 1.66711
+
+			def a_ratio(a_candidate):
+				a2 = a_candidate[1]
+				a3 = a_candidate[2]
+				return a3/a2
+
 			def feasibility_bool(a_candidate):
-				return feasibility_via_small_m_reciprocal(a_candidate) == 0
+				return -k0 < a_ratio(a_candidate) < k0
 
-			feasibility_constraint = optimize.NonlinearConstraint(feasibility_via_small_m_reciprocal, 0, 0)
+			# As laid out in Keelin 2016, in the proof of Proposition 2 (page 270, left column)
+			feasibility_constraint = optimize.NonlinearConstraint(a_ratio,-k0,k0)
 
-		if feasibility_method == 'QuantileSumNegativeIncrements':
-			def feasibility_bool(a_candidate):
-				return feasibility_via_cdf_sum_negative(a_candidate) == 0
 
-			feasibility_constraint = optimize.NonlinearConstraint(feasibility_via_cdf_sum_negative, 0, 0)
+		else:
+			if feasibility_method == 'SmallMReciprocal':
+				def feasibility_bool(a_candidate):
+					return feasibility_via_small_m_reciprocal(a_candidate) == 0
 
-		if feasibility_method == 'QuantileMinimumIncrement':
-			def feasibility_bool(a_candidate):
-				return feasibility_via_quantile_minimum_increment(a_candidate) >= 0
+				feasibility_constraint = optimize.NonlinearConstraint(feasibility_via_small_m_reciprocal, 0, 0)
 
-			feasibility_constraint = optimize.NonlinearConstraint(feasibility_via_quantile_minimum_increment, 0, np.inf)
+			if feasibility_method == 'QuantileSumNegativeIncrements':
+				def feasibility_bool(a_candidate):
+					return feasibility_via_cdf_sum_negative(a_candidate) == 0
+
+				feasibility_constraint = optimize.NonlinearConstraint(feasibility_via_cdf_sum_negative, 0, 0)
+
+			if feasibility_method == 'QuantileMinimumIncrement':
+				def feasibility_bool(a_candidate):
+					return feasibility_via_quantile_minimum_increment(a_candidate) >= 0
+
+				feasibility_constraint = optimize.NonlinearConstraint(feasibility_via_quantile_minimum_increment, 0, np.inf)
 
 		shifted = self.find_shifted_value((tuple(self.cdf_ps), tuple(self.cdf_xs), self.lbound, self.ubound), cache)
 		if shifted:
@@ -742,3 +759,10 @@ class MetaLogistic(stats.rv_continuous):
 
 		fig.show()
 		return fig
+
+	def is_symmetric_percentile_triplet(self):
+		if len(self.cdf_ps) == 3:
+			a, b, c = [round(Decimal(i),10) for i in self.cdf_ps]
+			if b == 0.5 and a == 1 - c:
+				return True
+		return False
