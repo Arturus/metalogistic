@@ -183,8 +183,8 @@ class MetaLogistic(stats.rv_continuous):
 					raise ValueError("term cannot be greater than the number of CDF data points provided")
 
 		if term is not None:
-			if term < 3:
-				raise ValueError("term cannot be less than 3. Just use the logistic distribution, no need to go meta!")
+			if term < 2:
+				raise ValueError("term cannot be less than 2.")
 
 		if a_vector is not None and term is not None:
 			if term > len(a_vector):
