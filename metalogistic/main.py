@@ -305,22 +305,26 @@ class MetaLogistic(stats.rv_continuous):
 			self.a_vector = np.append(optimize_result.x[0] + shift_distance, optimize_result.x[1:])
 			self.numeric_leastSQ_OptimizeResult = None
 			if avoid_extreme_steepness:
-				self.avoid_extreme_steepness()
+				self.avoid_extreme_steepness(feasibility_bool)
 			return
 
 		a0 = self.a_vector
 
+		optimize_results = []
+
 		# First, try the default solver, which is often fast and accurate
 		options = {}
-		optimize_results = optimize.minimize(
+		optimize_results_default = optimize.minimize(
 											loss_function,
 											a0,
 											constraints=feasibility_constraint,
 											options=options)
-		self.numeric_ls_solver_used = 'Default'
+		if feasibility_bool(optimize_results_default.x):
+			optimize_results_default.optimization_method_name = 'SLSQP'
+			optimize_results.append(optimize_results_default)
 
 		# If the mean square error is too large or distribution invalid, try the trust-constr solver
-		if optimize_results.fun > 0.01 or not feasibility_bool(optimize_results.x):
+		if optimize_results_default.fun > 0.01 or not feasibility_bool(optimize_results_default.x):
 			options = {
 				'xtol': 1e-6,  # this improves speed considerably vs the default of 1e-8
 				'maxiter': 300  # give up if taking too long
@@ -331,20 +335,26 @@ class MetaLogistic(stats.rv_continuous):
 															constraints=feasibility_constraint,
 															method='trust-constr',
 															options=options)
-			self.numeric_ls_solver_used = 'trust-constr'
+			if feasibility_bool(optimize_results_alternate.x):
+				optimize_results_alternate.optimization_method_name = 'trust-constr'
+				optimize_results.append(optimize_results_alternate)
 
-			if optimize_results_alternate.constr_violation == 0:
-				if optimize_results_alternate.fun < optimize_results.fun:
-					optimize_results = optimize_results_alternate
-				else:
-					optimize_results = optimize_results
 
-		cache[(tuple(self.cdf_ps), tuple(self.cdf_xs), self.lbound, self.ubound)] = optimize_results
-		self.a_vector = optimize_results.x
-		if avoid_extreme_steepness: self.avoid_extreme_steepness()
-		self.numeric_leastSQ_OptimizeResult = optimize_results
+		# Choose the best optimize result
+		if not optimize_results:
+			# We failed to find a solution
+			return
+		optimize_result_selected = sorted(optimize_results, key=lambda r: r.fun)[0]
+		cache[(tuple(self.cdf_ps), tuple(self.cdf_xs), self.lbound, self.ubound)] = optimize_result_selected
+		self.numeric_ls_solver_used = optimize_result_selected.optimization_method_name
 
-	def avoid_extreme_steepness(self):
+		self.a_vector = optimize_result_selected.x
+
+		if avoid_extreme_steepness:
+			self.avoid_extreme_steepness(feasibility_bool)
+		self.numeric_leastSQ_OptimizeResult = optimize_result_selected
+
+	def avoid_extreme_steepness(self,feasibility_bool_callable):
 		"""
 		Since we are using numerical approximations to determine feasibility,
 		the feasible distribution that most closely fits the data may actually be just barely infeasible.
@@ -359,7 +369,9 @@ class MetaLogistic(stats.rv_continuous):
 		"""
 		steepness = self.pdf_max()
 		if steepness > 10:
-			self.a_vector = np.append(self.a_vector[0:-1], self.a_vector[-1] * 99 / 100)
+			candidate = np.append(self.a_vector[0:-1], self.a_vector[-1] * 99 / 100)
+			if feasibility_bool_callable(candidate):
+				self.a_vector = candidate
 
 	def pdf_max(self):
 		"""
