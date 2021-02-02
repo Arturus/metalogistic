@@ -136,7 +136,7 @@ class _MetaLogisticMonoFit(stats.rv_continuous):
 		`feasibility_method` is the method by which we check whether an a-vector is feasible. It often has an important impact on the correctness and speed
 		of the numerical minimization results.
 		"""
-		bounds_kwargs = {}
+		bounds_kwargs = {}  # bounds on the metalog specified by user
 		if self.lbound is not None:
 			bounds_kwargs['lbound'] = self.lbound
 		if self.ubound is not None:
@@ -157,7 +157,7 @@ class _MetaLogisticMonoFit(stats.rv_continuous):
 		def feasibility_via_small_m_reciprocal(a_candidate):
 			return _MetaLogisticMonoFit(a_vector=a_candidate, **bounds_kwargs).infeasibility_score_m_reciprocal()
 
-		if self.is_symmetric_percentile_triplet():
+		if self.cdf_len == 3:
 			k0 = 1.66711
 
 			def a_ratio(a_candidate):
@@ -166,13 +166,16 @@ class _MetaLogisticMonoFit(stats.rv_continuous):
 				return a3/a2
 
 			def feasibility_bool(a_candidate):
-				return -k0 < a_ratio(a_candidate) < k0
+				return -k0 < a_ratio(a_candidate) < k0 and a_candidate[1] > 0
 
 			# As laid out in Keelin 2016, in the proof of Proposition 2 (page 270, left column)
 			feasibility_constraint = optimize.NonlinearConstraint(a_ratio,-k0,k0)
 
+			# The generalization to any three-term metalog implies the restriction that a2>0
+			bounds_a = [(None,None),(0, np.inf)] + [(None,None)]*(self.term-2)
 
 		else:
+			bounds_a = None  # Bounds on a-vector
 			if feasibility_method == 'SmallMReciprocal':
 				def feasibility_bool(a_candidate):
 					return feasibility_via_small_m_reciprocal(a_candidate) == 0
@@ -210,6 +213,7 @@ class _MetaLogisticMonoFit(stats.rv_continuous):
 											loss_function,
 											a0,
 											constraints=feasibility_constraint,
+											bounds=bounds_a,
 											options=options)
 		if feasibility_bool(optimize_results_default.x):
 			optimize_results_default.optimization_method_name = 'SLSQP'
@@ -225,6 +229,7 @@ class _MetaLogisticMonoFit(stats.rv_continuous):
 															loss_function,
 															a0,
 															constraints=feasibility_constraint,
+															bounds=bounds_a,
 															method='trust-constr',
 															options=options)
 			if feasibility_bool(optimize_results_alternate.x):
@@ -666,13 +671,6 @@ class _MetaLogisticMonoFit(stats.rv_continuous):
 
 		fig.show()
 		return fig
-
-	def is_symmetric_percentile_triplet(self):
-		if len(self.cdf_ps) == 3:
-			a, b, c = [round(Decimal(i),10) for i in self.cdf_ps]
-			if b == 0.5 and a == 1 - c:
-				return True
-		return False
 
 
 class MetaLogistic(_MetaLogisticMonoFit):
