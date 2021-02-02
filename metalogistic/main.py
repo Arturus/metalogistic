@@ -563,6 +563,7 @@ class _MetaLogisticMonoFit(stats.rv_continuous):
 
 		# We need a smaller `xtol` than the default value, in order to ensure correctness when
 		# evaluating the CDF or PDF in the extreme tails.
+		# todo: consider replacing brent's method with Newton's (or other), and provide the derivative of quantile, since it should be possible to obtain an analytic expression for that
 		return optimize.brentq(f_to_zero, 0, 1, xtol=1e-24, disp=True)
 
 	def _cdf(self, x):
