@@ -9,11 +9,14 @@ from decimal import Decimal
 cache = {}
 
 
-class MetaLogistic(stats.rv_continuous):
+class _MetaLogisticMonoFit(stats.rv_continuous):
 	"""
-	The only class in this package.
+	This class should generally only be called inside its user-facing subclass MetaLogistic.
 
-	We subclass scipy.stats.rv_continuous so we can make use of all the nice SciPy methods. We redefine the private methods
+	It attempts to fit the data using only one fit method and one number of terms. The other class,
+	MetaLogistic, handles the logic for attempting multiple fit methods.
+
+	Here, we subclass scipy.stats.rv_continuous so we can make use of all the nice SciPy methods. We redefine the private methods
 	_cdf, _pdf, and _ppf, and SciPy will make calls to these whenever needed.
 	"""
 
@@ -27,32 +30,15 @@ class MetaLogistic(stats.rv_continuous):
 			ubound=None,
 			a_vector=None,
 			feasibility_method='SmallMReciprocal',
-			validate_inputs=True):
+			super_class_call_only=False):
 		"""
-		You must either provide CDF data or directly provide an a-vector. All other parameters are optional.
-
-		:param cdf_ps: Probabilities of the CDF input data.
-		:param cdf_xs: X-values of the CDF input data (the pre-images of the probabilities).
-		:param term: Produces a `term`-term metalog. Cannot be greater than the number of CDF points provided. By default, it is equal to the number of CDF points.
-		:param fit_method: Set to 'Linear least squares' to allow linear least squares only. By default, numerical methods are tried if linear least squares fails.
-		:param lbound: Lower bound
-		:param ubound: Upper bound
-		:param a_vector: You may supply the a-vector directly, in which case the input data `cdf_ps` and `cdf_xs` are not used for fitting.
-		:param feasibility_method: The method used to determine whether an a-vector corresponds to a feasible (valid) probability distribution. Its most important use is in the numerical solver, where it can have an impact on peformance and correctness. The options are: 'SmallMReciprocal' (default),'QuantileSumNegativeIncrements','QuantileMinimumIncrement'.
+		This class should only be called inside its user-facing subclass MetaLogistic.
 		"""
-		super(MetaLogistic, self).__init__()
+		super().__init__()
+		if super_class_call_only:
+			return
 
-		if validate_inputs:
-			self.validate_inputs(
-				cdf_ps=cdf_ps,
-				cdf_xs=cdf_xs,
-				term=term,
-				fit_method=fit_method,
-				lbound=lbound,
-				ubound=ubound,
-				a_vector=a_vector,
-				feasibility_method=feasibility_method
-			)
+
 
 		if lbound == -np.inf:
 			print("Infinite lower bound was ignored")
@@ -76,7 +62,7 @@ class MetaLogistic(stats.rv_continuous):
 		self.lbound = lbound
 		self.ubound = ubound
 
-		self.fit_method_requested = fit_method
+		self.fit_method = fit_method
 		self.numeric_ls_solver_used = None
 		self.feasibility_method = feasibility_method
 
@@ -104,107 +90,13 @@ class MetaLogistic(stats.rv_continuous):
 		self.construct_z_vec()
 		self.construct_y_matrix()
 
-		#  Try linear least squares
-		self.fit_linear_least_squares()
-		self.fit_method_used = 'Linear least squares'
-
-		# If linear least squares result is feasible
-		if self.is_feasible():
-			self.valid_distribution = True
-
-		#  If linear least squares result is not feasible
+		if self.fit_method == 'Linear least squares':
+			self.fit_linear_least_squares()
+		elif self.fit_method == 'numeric':
+			self.fit_linear_least_squares()  # This is done to generate an initial guess for the numeric method
+			self.fit_numeric_least_squares(feasibility_method=feasibility_method)
 		else:
-			# if the user allows it, use numerical least squares
-			if not fit_method == 'Linear least squares':
-				self.fit_method_used = 'numeric'
-				# TODO: set a timeout (e.g. 1 second) for the call to fitNumericLeastSquares(). If the call
-				# times out with the default feasibility method, iterate through all possible methods,
-				# keeping the best result. This is because, in my experience, if a method will succeed, it succeeds
-				# within hundreds of milliseconds; if it's been going on for more than a second, another method will likely give
-				# good results faster.
-				with warnings.catch_warnings():
-					warnings.filterwarnings("ignore", category=UserWarning, module='scipy.optimize')
-					self.fit_numeric_least_squares(feasibility_method=self.feasibility_method)
-
-			# If only LLS is allowed, we cannot find a valid metalog
-			else:
-				self.valid_distribution = False
-
-		if not self.is_feasible():
-			print("Warning: the program was not able to fit a valid metalog distribution for your data.")
-
-	def validate_inputs(
-			self,
-			cdf_ps,
-			cdf_xs,
-			term,
-			fit_method,
-			lbound,
-			ubound,
-			a_vector,
-			feasibility_method):
-
-		def check_Ps_Xs(array, name):
-			if support.is_list_like(array):
-				for item in array:
-					if not support.is_numeric(item):
-						raise ValueError(name + " must be an array of numbers")
-			else:
-				raise ValueError(name + " must be an array of numbers")
-
-		if cdf_xs is not None:
-			check_Ps_Xs(cdf_xs, 'cdf_xs')
-			cdf_xs = np.asarray(cdf_xs)
-
-		if cdf_ps is not None:
-			check_Ps_Xs(cdf_ps, 'cdf_ps')
-			cdf_ps = np.asarray(cdf_ps)
-
-			if np.any(cdf_ps < 0) or np.any(cdf_ps > 1):
-				raise ValueError("Probabilities must be between 0 and 1")
-
-		if cdf_ps is not None and cdf_xs is not None:
-			if len(cdf_ps) != len(cdf_xs):
-				raise ValueError("cdf_ps and cdf_xs must have the same length")
-
-			if len(cdf_ps) < 2:
-				raise ValueError("Must provide at least two CDF data points")
-
-			ps_xs_sorted = sorted(zip(cdf_ps, cdf_xs))
-			prev = -np.inf
-			for tuple_ in ps_xs_sorted:
-				p, x = tuple_
-				if x <= prev:
-					print("Warning: Non-increasing CDF input data. Are you sure?")
-				prev = x
-
-			if term is not None:
-				if term > len(cdf_ps):
-					raise ValueError("term cannot be greater than the number of CDF data points provided")
-
-		if term is not None:
-			if term < 2:
-				raise ValueError("term cannot be less than 2.")
-
-		if a_vector is not None and term is not None:
-			if term > len(a_vector):
-				raise ValueError("term cannot be greater than the length of the a_vector")
-
-		if fit_method is not None:
-			if fit_method not in ['Linear least squares']:
-				raise ValueError("Unknown fit method")
-
-		if lbound is not None:
-			if lbound > min(cdf_xs):
-				raise ValueError("Lower bound cannot be greater than the lowest data point")
-
-		if ubound is not None:
-			if ubound < max(cdf_xs):
-				raise ValueError("Upper bound cannot be less than the greatest data point")
-
-		feasibility_methods = ['SmallMReciprocal', 'QuantileSumNegativeIncrements', 'QuantileMinimumIncrement']
-		if feasibility_method not in feasibility_methods:
-			raise ValueError("feasibility_method must be one of: " + str(feasibility_methods))
+			raise ValueError('Must supply a fit method to _MetaLogisticMonoFit (when called without an a-vector)')
 
 	def is_feasible(self):
 		if self.feasibility_method == 'QuantileMinimumIncrement':
@@ -253,17 +145,17 @@ class MetaLogistic(stats.rv_continuous):
 		def loss_function(a_candidate):
 			# Setting a_vector in this MetaLogistic call overrides the cdf_ps and cdf_xs arguments, which are only used
 			# for meanSquareError().
-			return MetaLogistic(self.cdf_ps, self.cdf_xs, **bounds_kwargs, a_vector=a_candidate, validate_inputs=False).mean_square_error()
+			return _MetaLogisticMonoFit(self.cdf_ps, self.cdf_xs, **bounds_kwargs, a_vector=a_candidate).mean_square_error()
 
 		# Choose the method of determining feasibility.
 		def feasibility_via_cdf_sum_negative(a_candidate):
-			return MetaLogistic(a_vector=a_candidate, **bounds_kwargs, validate_inputs=False).infeasibility_score_quantile_sum_negative_increments()
+			return _MetaLogisticMonoFit(a_vector=a_candidate, **bounds_kwargs).infeasibility_score_quantile_sum_negative_increments()
 
 		def feasibility_via_quantile_minimum_increment(a_candidate):
-			return MetaLogistic(a_vector=a_candidate, **bounds_kwargs, validate_inputs=False).quantile_minimum_increment()
+			return _MetaLogisticMonoFit(a_vector=a_candidate, **bounds_kwargs).quantile_minimum_increment()
 
 		def feasibility_via_small_m_reciprocal(a_candidate):
-			return MetaLogistic(a_vector=a_candidate, **bounds_kwargs, validate_inputs=False).infeasibility_score_m_reciprocal()
+			return _MetaLogisticMonoFit(a_vector=a_candidate, **bounds_kwargs).infeasibility_score_m_reciprocal()
 
 		if self.is_symmetric_percentile_triplet():
 			k0 = 1.66711
@@ -323,7 +215,7 @@ class MetaLogistic(stats.rv_continuous):
 			optimize_results_default.optimization_method_name = 'SLSQP'
 			optimize_results.append(optimize_results_default)
 
-		# If the mean square error is too large or distribution invalid, try the trust-constr solver
+		# If the mean square error is too large or distribution invalid, try the trust-constr solver (todo potentially move this into MetaLogistic class)
 		if optimize_results_default.fun > 0.01 or not feasibility_bool(optimize_results_default.x):
 			options = {
 				'xtol': 1e-6,  # this improves speed considerably vs the default of 1e-8
@@ -387,7 +279,7 @@ class MetaLogistic(stats.rv_continuous):
 		if not cache:
 			return False
 		for cache_tuple, cache_value in cache.items():
-			shifted = MetaLogistic.is_same_shifted(support.tuple_to_dict(cache_tuple), support.tuple_to_dict(input_tuple))
+			shifted = _MetaLogisticMonoFit.is_same_shifted(support.tuple_to_dict(cache_tuple), support.tuple_to_dict(input_tuple))
 			if shifted is not False:
 				return cache_value, shifted
 		return False
@@ -701,12 +593,12 @@ class MetaLogistic(stats.rv_continuous):
 			return self.density_m(cumulative_prob)
 
 	def print_summary(self):
-		print("Fit method used:", self.fit_method_used)
+		print("Fit method used:", self.fit_method)
 		print("Distribution is valid:", self.valid_distribution)
 		print("Method for determining distribution validity:", self.feasibility_method)
 		if not self.valid_distribution:
 			print("Distribution validity constraint violation:", self.valid_distribution_violation)
-		if not self.fit_method_used == 'Linear least squares':
+		if not self.fit_method == 'Linear least squares':
 			print("Solver for numeric fit:", self.numeric_ls_solver_used)
 			print("Solver convergence:", self.numeric_leastSQ_OptimizeResult.success)
 		# print("Solver convergence message:", self.numeric_leastSQ_OptimizeResult.message)
@@ -781,3 +673,217 @@ class MetaLogistic(stats.rv_continuous):
 			if b == 0.5 and a == 1 - c:
 				return True
 		return False
+
+
+class MetaLogistic(_MetaLogisticMonoFit):
+	"""
+	This is the only user-facing class in this package. It handles the logic that attempts to
+	fit the distribution using an initial fit method and a number of terms, and falls back to
+	less desirable methods in case of failure.
+
+	It makes calls to _MetaLogisticMonoFit. That class does all the mathematical work of
+	fitting the distribution, and also has methods for printing a summary and displaying plots.
+
+	Since _MetaLogisticMonoFit is a superclass of MetaLogistic, all its methods are available
+	in an instance of MetaLogistic.
+	"""
+	def __init__(
+			self,
+			cdf_ps=None,
+			cdf_xs=None,
+			term=None,
+			fit_method=None,
+			allow_fallback=True,
+			lbound=None,
+			ubound=None,
+			a_vector=None,
+			feasibility_method='SmallMReciprocal',
+			validate_inputs=True):
+		"""
+		You must either provide CDF data or directly provide an a-vector. All other parameters are optional.
+
+		:param cdf_ps: Probabilities of the CDF input data.
+		:param cdf_xs: X-values of the CDF input data (the pre-images of the probabilities).
+		:param term: Produces a `term`-term metalog. Cannot be greater than the number of CDF points provided. By default, it is equal to the number of CDF points.
+		:param fit_method: Set to 'Linear least squares' to allow linear least squares only. By default, numerical methods are tried if linear least squares fails.
+		:param lbound: Lower bound
+		:param ubound: Upper bound
+		:param a_vector: You may supply the a-vector directly, in which case the input data `cdf_ps` and `cdf_xs` are not used for fitting.
+		:param feasibility_method: The method used to determine whether an a-vector corresponds to a feasible (valid) probability distribution. Its most important use is in the numerical solver, where it can have an impact on peformance and correctness. The options are: 'SmallMReciprocal' (default),'QuantileSumNegativeIncrements','QuantileMinimumIncrement'.
+		"""
+
+		super().__init__(super_class_call_only=True)
+
+		if term is not None:
+			allow_fallback = False
+
+		if validate_inputs:
+			self.validate_inputs(
+				cdf_ps=cdf_ps,
+				cdf_xs=cdf_xs,
+				term=term,
+				fit_method=fit_method,
+				lbound=lbound,
+				ubound=ubound,
+				a_vector=a_vector,
+				feasibility_method=feasibility_method
+			)
+
+		self.cdf_ps = cdf_ps
+		self.cdf_xs = cdf_xs
+		self.cdf_len = len(cdf_ps)
+
+		self.lbound = lbound
+		self.ubound = ubound
+
+
+		user_kwargs = {
+			'cdf_ps': cdf_ps,
+			'cdf_xs': cdf_xs,
+			'term': term,
+			'lbound': lbound,
+			'ubound': ubound,
+			'feasibility_method': feasibility_method,
+		}
+
+		self.fit_method_requested = fit_method
+		self.term_requested = term
+
+		self.candidates_valid = []
+		self.candidates_all = []
+
+		#  Try linear least squares
+		candidate = _MetaLogisticMonoFit(**user_kwargs, fit_method='Linear least squares')
+
+		# If linear least squares works, we are done
+		self.candidates_all.append(candidate)
+		if candidate.is_feasible():
+			self.candidates_valid.append(candidate)
+
+		# todo implement timeouts
+		# Otherwise, try other methods if allowed
+		else:
+			# if the user allows it, use numerical least squares
+			if not fit_method == 'Linear least squares':
+				with warnings.catch_warnings():
+					warnings.filterwarnings("ignore", category=UserWarning, module='scipy.optimize')
+
+					candidate = _MetaLogisticMonoFit(**user_kwargs, fit_method='numeric')
+
+					self.candidates_all.append(candidate)
+					if candidate.is_feasible():
+						self.candidates_valid.append(candidate)
+
+			if allow_fallback:
+				if term is not None:
+					term_fallback = term-1
+				else:
+					term_fallback = len(cdf_ps)-1
+				kwargs = user_kwargs.copy()
+				kwargs['term'] = term_fallback
+				candidate = _MetaLogisticMonoFit(**kwargs, fit_method='Linear least squares')
+
+				self.candidates_all.append(candidate)
+				if candidate.is_feasible():
+					self.candidates_valid.append(candidate)
+
+				elif not fit_method == 'Linear least squares':
+					if self.candidates_valid:
+						current_winner_error = sorted(self.candidates_valid, key=lambda c: c.mean_square_error())[0].mean_square_error()
+					else:
+						current_winner_error = np.inf
+
+					# Only do the N-1 numeric fit if the current winner is poor (todo make global constant)
+					if current_winner_error > 0.01:
+						with warnings.catch_warnings():
+							warnings.filterwarnings("ignore", category=UserWarning, module='scipy.optimize')
+
+							candidate = _MetaLogisticMonoFit(**kwargs, fit_method='numeric')
+
+							self.candidates_all.append(candidate)
+							if candidate.is_feasible():
+								self.candidates_valid.append(candidate)
+
+		if self.candidates_valid:
+			self.valid_distribution = True
+			winning_candidate = sorted(self.candidates_valid, key=lambda c: c.mean_square_error())[0]
+
+			self.__dict__.update(winning_candidate.__dict__.copy())  # Should maybe do some filtering here
+			self.term_used = winning_candidate.term
+			self.fit_method_used = winning_candidate.fit_method
+		else:
+			self.valid_distribution = False
+
+
+	def validate_inputs(
+			self,
+			cdf_ps,
+			cdf_xs,
+			term,
+			fit_method,
+			lbound,
+			ubound,
+			a_vector,
+			feasibility_method):
+
+		def check_Ps_Xs(array, name):
+			if support.is_list_like(array):
+				for item in array:
+					if not support.is_numeric(item):
+						raise ValueError(name + " must be an array of numbers")
+			else:
+				raise ValueError(name + " must be an array of numbers")
+
+		if cdf_xs is not None:
+			check_Ps_Xs(cdf_xs, 'cdf_xs')
+			cdf_xs = np.asarray(cdf_xs)
+
+		if cdf_ps is not None:
+			check_Ps_Xs(cdf_ps, 'cdf_ps')
+			cdf_ps = np.asarray(cdf_ps)
+
+			if np.any(cdf_ps < 0) or np.any(cdf_ps > 1):
+				raise ValueError("Probabilities must be between 0 and 1")
+
+		if cdf_ps is not None and cdf_xs is not None:
+			if len(cdf_ps) != len(cdf_xs):
+				raise ValueError("cdf_ps and cdf_xs must have the same length")
+
+			if len(cdf_ps) < 2:
+				raise ValueError("Must provide at least two CDF data points")
+
+			ps_xs_sorted = sorted(zip(cdf_ps, cdf_xs))
+			prev = -np.inf
+			for tuple_ in ps_xs_sorted:
+				p, x = tuple_
+				if x <= prev:
+					print("Warning: Non-increasing CDF input data. Are you sure?")
+				prev = x
+
+			if term is not None:
+				if term > len(cdf_ps):
+					raise ValueError("term cannot be greater than the number of CDF data points provided")
+
+		if term is not None:
+			if term < 2:
+				raise ValueError("term cannot be less than 2.")
+
+		if a_vector is not None and term is not None:
+			if term > len(a_vector):
+				raise ValueError("term cannot be greater than the length of the a_vector")
+
+		if fit_method is not None:
+			if fit_method not in ['Linear least squares']:
+				raise ValueError("Unknown fit method")
+
+		if lbound is not None:
+			if lbound > min(cdf_xs):
+				raise ValueError("Lower bound cannot be greater than the lowest data point")
+
+		if ubound is not None:
+			if ubound < max(cdf_xs):
+				raise ValueError("Upper bound cannot be less than the greatest data point")
+
+		feasibility_methods = ['SmallMReciprocal', 'QuantileSumNegativeIncrements', 'QuantileMinimumIncrement']
+		if feasibility_method not in feasibility_methods:
+			raise ValueError("feasibility_method must be one of: " + str(feasibility_methods))
