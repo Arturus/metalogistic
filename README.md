@@ -63,8 +63,8 @@ cdf_xs [-20, -1, 40]
 Bounds: None None
 
 Timings:
-'doFit'  17.08 ms
-'createPlotData'  6.98 ms
+'doFit'  3.99 ms
+'createPlotData'  3.99 ms
 ```
 
 When we are forced to use numerical fitting methods:
@@ -76,8 +76,8 @@ cdf_xs [-20, -1, 100]
 Bounds: None 1000
 
 Timings:
-'doFit'  600.44 ms
-'createPlotData'  9.97 ms
+'doFit'  345.08 ms
+'createPlotData'  4.98 ms
 
 #### Speed test ####
 Data:
@@ -86,8 +86,8 @@ cdf_xs [-20, -1, 100]
 Bounds: None None
 
 Timings:
-'doFit'  1035.46 ms
-'createPlotData'  6.98 ms
+'doFit'  354.57 ms
+'createPlotData'  5.98 ms
 ```
 
 # License
