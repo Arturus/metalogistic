@@ -446,28 +446,27 @@ class _MetaLogisticMonoFit(stats.rv_continuous):
 			else:
 				return np.inf
 
-		# `self.a_vector` is 0-indexed, while in Keelin 2016 the a-vector is 1-indexed.
-		# To make this method as easy as possible to read if following along with the paper, I create a dictionary `a`
-		# that mimics a 1-indexed vector.
-		a = {i + 1: element for i, element in enumerate(self.a_vector)}
+		# Note that `self.a_vector` is 0-indexed, while in Keelin 2016 the a-vector is 1-indexed.
+		# To make this method easier to read if following along with the paper, I subtract 1 when
+		# subscripting the self.a_vector
 
 		# The series of quantile functions. Although we only return the last result in the series, the entire series is necessary to construct it
 		ln_p_term = np.log(probability / (1 - probability))
 		p05_term = probability - 0.5
-		quantile_functions = {2: a[1] + a[2] * ln_p_term}
+		quantile_functions = {2: self.a_vector[1 - 1] + self.a_vector[2 - 1] * ln_p_term}
 
 		if self.term > 2:
-			quantile_functions[3] = quantile_functions[2] + a[3] * p05_term * ln_p_term
+			quantile_functions[3] = quantile_functions[2] + self.a_vector[3 - 1] * p05_term * ln_p_term
 		if self.term > 3:
-			quantile_functions[4] = quantile_functions[3] + a[4] * p05_term
+			quantile_functions[4] = quantile_functions[3] + self.a_vector[4 - 1] * p05_term
 
 		if self.term > 4:
 			for n in range(5, self.term + 1):
 				if n % 2 != 0:
-					quantile_functions[n] = quantile_functions[n - 1] + a[n] * p05_term ** ((n - 1) / 2)
+					quantile_functions[n] = quantile_functions[n - 1] + self.a_vector[n - 1] * p05_term ** ((n - 1) / 2)
 
 				if n % 2 == 0:
-					quantile_functions[n] = quantile_functions[n - 1] + a[n] * p05_term ** (n / 2 - 1) * ln_p_term
+					quantile_functions[n] = quantile_functions[n - 1] + self.a_vector[n - 1] * p05_term ** (n / 2 - 1) * ln_p_term
 
 		quantile_function = quantile_functions[self.term]
 
@@ -501,28 +500,27 @@ class _MetaLogisticMonoFit(stats.rv_continuous):
 		# The series of density functions. Although we only return the last result in the series, the entire series is necessary to construct it
 		density_functions = {}
 
-		# `self.a_vector` is 0-indexed, while in Keelin 2016 the a-vector is 1-indexed.
-		# To make this method as easy as possible to read if following along with the paper, I create a dictionary `a`
-		# that mimics a 1-indexed vector.
-		a = {i + 1: element for i, element in enumerate(self.a_vector)}
+		# Note that `self.a_vector` is 0-indexed, while in Keelin 2016 the a-vector is 1-indexed.
+		# To make this method easier to read if following along with the paper, I subtract 1 when
+		# subscripting the self.a_vector
 
 		ln_p_term = np.log(cumulative_prob / (1 - cumulative_prob))
 		p05_term = cumulative_prob - 0.5
 		p1p_term = cumulative_prob * (1 - cumulative_prob)
 
-		density_functions[2] = p1p_term / a[2]
+		density_functions[2] = p1p_term / self.a_vector[2 - 1]
 		if self.term > 2:
-			density_functions[3] = 1 / (1 / density_functions[2] + a[3] * (p05_term / p1p_term + ln_p_term))
+			density_functions[3] = 1 / (1 / density_functions[2] + self.a_vector[3 - 1] * (p05_term / p1p_term + ln_p_term))
 		if self.term > 3:
-			density_functions[4] = 1 / (1 / density_functions[3] + a[4])
+			density_functions[4] = 1 / (1 / density_functions[3] + self.a_vector[4 - 1])
 
 		if self.term > 4:
 			for n in range(5, self.term + 1):
 				if n % 2 != 0:
-					density_functions[n] = 1 / (1 / density_functions[n - 1] + a[n] * ((n - 1) / 2) * p05_term ** ((n - 3) / 2))
+					density_functions[n] = 1 / (1 / density_functions[n - 1] + self.a_vector[n - 1] * ((n - 1) / 2) * p05_term ** ((n - 3) / 2))
 
 				if n % 2 == 0:
-					density_functions[n] = 1 / (1 / density_functions[n - 1] + a[n] * (p05_term ** (n / 2 - 1) / p1p_term +
+					density_functions[n] = 1 / (1 / density_functions[n - 1] + self.a_vector[n - 1] * (p05_term ** (n / 2 - 1) / p1p_term +
 																		 (n / 2 - 1) * p05_term ** (n / 2 - 2) * ln_p_term))
 
 		density_function = density_functions[self.term]
