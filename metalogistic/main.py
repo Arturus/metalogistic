@@ -616,7 +616,7 @@ class _MetaLogisticMonoFit(stats.rv_continuous):
 			p_from = self.get_cumulative_prob(x_from)
 			p_to = self.get_cumulative_prob(x_to)
 
-		cdf_ps = np.linspace(p_from, p_to, n)
+		cdf_ps = self.get_linspace_for_plot(p_from, p_to, n)
 		cdf_xs = self.quantile(cdf_ps)
 
 		return {'X-values': cdf_xs, 'Probabilities': cdf_ps}
@@ -628,11 +628,35 @@ class _MetaLogisticMonoFit(stats.rv_continuous):
 			p_from = self.get_cumulative_prob(x_from)
 			p_to = self.get_cumulative_prob(x_to)
 
-		pdf_ps = np.linspace(p_from, p_to, n)
+		pdf_ps = self.get_linspace_for_plot(p_from, p_to, n)
 		pdf_xs = self.quantile(pdf_ps)
 		pdf_densities = self.density_m(pdf_ps)
 
 		return {'X-values': pdf_xs, 'Densities': pdf_densities}
+
+	def get_linspace_for_plot(self, p_from, p_to, n):
+		"""
+		Solve the following system:
+
+		N = MIDDLE + 2*TAIL
+		TAIL = (8/84)*MIDDLE*FACTOR
+		"""
+
+		factor = 8
+		n_middle = round(n / (1 + 2 * factor * (8 / 84)))
+		n_tail = round((n - n_middle) / 2)
+
+		p_range = p_to - p_from
+		p_08 = p_from + .08 * p_range
+		p_92 = p_from + .92 * p_range
+
+		ps = np.hstack([
+			np.linspace(p_from, p_08, n_tail),
+			np.linspace(p_08, p_92, n_middle),
+			np.linspace(p_92, p_to, n_tail)
+		])
+
+		return ps
 
 	def display_plot(self, p_from_to=(.001, .999), x_from_to=(None, None), n=100, hide_extreme_densities=50):
 		"""
